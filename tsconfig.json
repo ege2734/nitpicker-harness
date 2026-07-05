@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true
+  },
+  "// note": "Harness source (src/**) plus the reused nitpicker TS we bundle/run (vendor core/server/cli + the react-source seam) and all vitest units. Excluded: the vendored React/Next adapter (dev-overlay.tsx imports 'react', kept for reference only) and the .cjs Next loaders — neither is part of the harness build path.",
+  "include": [
+    "src/**/*.ts",
+    "vendor/nitpicker/core/**/*.ts",
+    "vendor/nitpicker/server/**/*.ts",
+    "vendor/nitpicker/cli/**/*.ts",
+    "vendor/nitpicker/react/react-source.ts",
+    "vendor/nitpicker/tests/**/*.ts",
+    "tests/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "vendor/nitpicker/react/dev-overlay.tsx",
+    "vendor/nitpicker/next/**",
+    "**/*.cjs"
+  ]
+}

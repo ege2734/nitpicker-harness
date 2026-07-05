@@ -1,0 +1,31 @@
+#!/usr/bin/env node
+// nitpicker-harness launcher. Runs the TypeScript CLI (src/cli.ts) under tsx with no build step, so
+// `npx nitpicker-harness --target http://localhost:3000` works straight from a clone or a published
+// package. ESM (the package is `"type": "module"`).
+import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, "..");
+const cli = join(root, "src", "cli.ts");
+const require = createRequire(import.meta.url);
+
+// Prefer the locally-installed tsx CLI; fall back to `npx tsx` if it isn't resolvable.
+let tsxBin = null;
+try {
+  tsxBin = require.resolve("tsx/dist/cli.mjs", { paths: [root] });
+} catch {
+  tsxBin = null;
+}
+
+const child = tsxBin
+  ? spawn(process.execPath, [tsxBin, cli, ...process.argv.slice(2)], { stdio: "inherit" })
+  : spawn("npx", ["tsx", cli, ...process.argv.slice(2)], { stdio: "inherit" });
+
+child.on("exit", (code) => process.exit(code == null ? 0 : code));
+child.on("error", (err) => {
+  console.error("nitpicker-harness: failed to launch —", err.message);
+  process.exit(1);
+});
