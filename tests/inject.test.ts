@@ -113,6 +113,26 @@ describe("relaxCsp", () => {
     expect(out).toMatch(/connect-src 'self' http:\/\/127\.0\.0\.1:5178/);
   });
 
+  it("adds 'self' to a script-src that omits it (external overlay needs a source expression)", () => {
+    const out = relaxCsp("script-src https://cdn.example.com", "http://127.0.0.1:5178");
+    // existing source is preserved...
+    expect(out).toContain("https://cdn.example.com");
+    // ...and 'self' + the sidecar origin are added so the external overlay script loads.
+    expect(out).toMatch(/script-src[^;]*'self'/);
+    expect(out).toContain("http://127.0.0.1:5178");
+  });
+
+  it("does not duplicate 'self' when script-src already carries it", () => {
+    const out = relaxCsp("script-src 'self'", "http://127.0.0.1:5178");
+    expect(out.match(/'self'/g)?.length).toBe(1);
+  });
+
+  it("adds 'self' to default-src when it stands in for an absent script-src", () => {
+    const out = relaxCsp("default-src https://cdn.example.com", "http://127.0.0.1:5178");
+    expect(out).toMatch(/default-src[^;]*'self'/);
+    expect(out).toContain("https://cdn.example.com");
+  });
+
   it("widens default-src when there is no explicit script/connect-src", () => {
     const out = relaxCsp("default-src 'self'", "http://127.0.0.1:5178");
     expect(out).toMatch(/default-src 'self' http:\/\/127\.0\.0\.1:5178 'unsafe-inline'/);

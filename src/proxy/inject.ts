@@ -138,15 +138,26 @@ export function relaxCsp(csp: string, sidecarOrigin: string): string {
   const names = directives.map((d) => d.split(/\s+/, 1)[0].toLowerCase());
   const hasScriptSrc = names.includes("script-src");
 
+  // The overlay is an EXTERNAL same-origin script; 'unsafe-inline' does not authorize it — only source
+  // expressions do — so any directive that governs the overlay script must also carry 'self' (the harness
+  // origin under the proxy). Additive only: 'self' is appended when absent, never removing existing sources.
+  const widenForScript = (d: string): string => {
+    const widened = `${d} ${extra}`;
+    return /(^|\s)'self'(\s|$)/i.test(d) ? widened : `${widened} 'self'`;
+  };
+
   const relaxed = directives.map((d) => {
     const name = d.split(/\s+/, 1)[0].toLowerCase();
-    if (name === "script-src" || name === "script-src-elem" || name === "connect-src") {
+    if (name === "script-src" || name === "script-src-elem") {
+      return widenForScript(d);
+    }
+    if (name === "connect-src") {
       return `${d} ${extra}`;
     }
     // If there's no explicit script-src, the overlay script falls back to default-src — widen it so the
-    // script isn't blocked.
+    // external overlay script isn't blocked (needs 'self' too, not just 'unsafe-inline').
     if (name === "default-src" && !hasScriptSrc) {
-      return `${d} ${extra}`;
+      return widenForScript(d);
     }
     return d;
   });

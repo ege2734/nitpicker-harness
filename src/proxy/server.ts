@@ -106,6 +106,22 @@ export function startHarness(opts: HarnessOptions): Promise<Harness> {
     }
 
     // Non-HTML: forward status + (relaxed) headers verbatim and stream the body through untouched.
+    // pipe() attaches no error handler to the source, so guard proxyRes ourselves — an upstream drop
+    // mid-asset would otherwise emit an unhandled 'error' and crash the whole harness process.
+    let settled = false;
+    const onUpstreamError = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      log(`[nitpicker-harness] upstream asset stream error: ${err.message}`);
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      res.writeHead(502, { "content-type": "text/plain" });
+      res.end(`nitpicker-harness: upstream ${opts.target} failed mid-response (${err.message})`);
+    };
+    proxyRes.on("error", onUpstreamError);
+    proxyRes.on("aborted", () => onUpstreamError(new Error("upstream aborted")));
     res.writeHead(proxyRes.statusCode ?? 200, headers as Record<string, string | string[]>);
     proxyRes.pipe(res);
   });
