@@ -1,2 +1,120 @@
 # nitpicker-harness
-Standalone proxy harness for nitpicker: run any web app inside it and mark up feedback for AI coding agents, with zero nitpicker code in the target repo. Successor to the injected nitpicker skill.
+
+**Point it at a running web app and get the full [nitpicker](https://github.com/ege2734/nitpicker)
+feedback overlay — with zero nitpicker code in the target's repo.**
+
+nitpicker-harness is a standalone **same-origin reverse proxy**. It fronts a target dev server under its
+own origin and rewrites the streamed HTML on the fly to inject `@nitpicker/core`. Because the page then
+runs *same-origin* with the overlay, every nitpicker feature works unmodified:
+
+- 🖼️ **Region screenshots** — drag a box; the app's live DOM is rasterized (html2canvas) with a red box
+  burned in and everything else dimmed.
+- 🎯 **Element pick** — click a node; get its React **component** name (runtime fiber walk, no build
+  step), a stable CSS **selector**, testid, text, role, rect, and route.
+- 💬 **Chat / queue → sidecar** — batch feedback and `Send to agent`; the agent long-polls it off a
+  local sidecar.
+
+All of it with **zero source edits, no layout change, and no `next.config` touch** in the target. The
+harness reuses nitpicker's `core/`, `server/`, and `cli/` verbatim (vendored under `vendor/nitpicker/`);
+the only new code is the proxy + injection glue and the overlay bundler.
+
+> **Why a proxy and not an iframe?** The browser's Same-Origin Policy blocks a page from reading a
+> cross-origin iframe's DOM — which is exactly what html2canvas, the selector builder, and the fiber
+> walk need. Serving the target under the harness's own origin makes the frame same-origin, so those
+> features work.
+
+## Quickstart
+
+```bash
+# install deps (first time)
+npm install
+
+# your app's dev server is already running, e.g. on http://localhost:3000
+npm run start -- --target http://localhost:3000
+#   or, once published:  npx nitpicker-harness --target http://localhost:3000
+```
+
+It prints a harness URL (default `http://127.0.0.1:4000`) and starts its own sidecar. Open that URL,
+mark up your app with the bottom-center dock, hit **Send to agent**, then drain the feedback:
+
+```bash
+npm run poll -- --session nitpicker
+#   or:  npx nitpicker-harness poll --session nitpicker
+```
+
+`poll` prints a batch and exits (add `--watch` to keep receiving). Each item is a `region` (local PNG
+path, red box burned in), an `element` (component/selector/text/route), or a `message`.
+
+### CLI
+
+```
+nitpicker-harness --target <url> [--port 4000] [--session nitpicker] [--sidecar-port 5178] [--no-sidecar]
+nitpicker-harness poll --session <id> [--endpoint <url>] [--watch]
+nitpicker-harness health [--endpoint <url>]
+nitpicker-harness shutdown [--endpoint <url>]
+```
+
+## How it works
+
+```
+ browser ──▶  nitpicker-harness (:4000)  ──▶  target dev server (:3000)
+                 │  rewrites text/html:  inject overlay <script>, rewrite absolute URLs,
+                 │  strip X-Frame-Options, relax CSP (frame-ancestors/script-src/connect-src)
+                 │  forwards the HMR WebSocket (hot-reload survives)
+                 │  serves /__nitpicker-harness/overlay.js  (esbuild IIFE, html2canvas inlined)
+                 ▼
+             sidecar (:5178)  ◀── overlay POSTs feedback ──   agent `poll` drains it
+```
+
+- **`src/proxy/`** — the reverse proxy. `inject.ts` is the pure HTML/header rewriting (unit-tested);
+  `server.ts` wires it into an [`http-proxy`](https://github.com/http-party/node-http-proxy) instance
+  with streaming HTML injection + WebSocket forwarding.
+- **`src/overlay/`** — the browser entry that calls `Nitpicker.mount()` from the reused core, bundled by
+  esbuild into a single self-contained IIFE served to the proxied page (config rides on the script
+  URL's query string, so no inline script is needed).
+- **`vendor/nitpicker/`** — nitpicker's `core/` (overlay, region, elements, redbox, transport), the
+  React `resolveElement` glue, the `server/` sidecar, and the `cli/` poll/verify — copied in so this
+  repo is self-contained (it becomes nitpicker's canonical home when nitpicker is archived).
+
+## The one honest limit: `file:line:col` source
+
+A proxy sees the dev server's already-compiled output, so it can't manufacture exact source locations
+for an arbitrary app. **`component` + `selector` + `text` + `route` are the baseline** (and are enough
+for an agent to grep to the code). Exact `file:line:col` is an **opt-in**: add the vendored dev-only
+source-stamp loader (`vendor/nitpicker/next/`) to the target's `next.config` — the one target-side line.
+If you can add that, prefer the full [nitpicker install skill](https://github.com/ege2734/nitpicker),
+which also brings prod-safety gates. The harness's sweet spot is *no target changes at all*.
+
+## Status: Phase 1 (localhost dev proxy) — done vs. deferred
+
+**Done & verified** (against a live Next.js 15 / React 19 dev app):
+
+- ✅ Reverse proxy fronts the dev server under the harness origin; app renders identically.
+- ✅ Overlay injected into streamed HTML same-origin; dock appears.
+- ✅ Region screenshot rasterizes the app DOM with the red box (verified PNG).
+- ✅ Element pick returns component (`FeedbackCard`) + selector + text + route.
+- ✅ Region + element + message batch drained by the `poll` CLI over the session-keyed sidecar.
+- ✅ HMR WebSocket forwarded — editing the source hot-reloads the proxied page, overlay intact.
+- ✅ `X-Frame-Options` stripped, CSP `frame-ancestors` dropped + `script-src`/`connect-src` relaxed.
+
+**Deferred (follow-ups, not blockers):**
+
+- ⏭️ Exact `file:line:col` without any target change (fundamentally needs build cooperation — opt-in only).
+- ⏭️ Hard auth flows / third-party IdP redirects; SameSite-cookie edge cases.
+- ⏭️ Non-Next frameworks (Vite/React, Streamlit) — the proxy is framework-agnostic but only Next is
+  verified so far.
+- ⏭️ **Browser extension** (for deployed / non-owned sites) and the **platform layer** — explicitly out
+  of Phase 1 scope.
+
+## Development
+
+```bash
+npm run typecheck   # tsc --noEmit
+npm test            # vitest: proxy injection (tests/) + reused core (vendor/nitpicker/tests/)
+```
+
+See [`AGENTS.md`](./AGENTS.md) for repo-specific notes.
+
+## License
+
+MIT — see [LICENSE](./LICENSE). Reuses code from [nitpicker](https://github.com/ege2734/nitpicker) (MIT).
