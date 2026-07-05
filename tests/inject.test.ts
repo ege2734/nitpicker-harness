@@ -154,6 +154,23 @@ describe("relaxCsp", () => {
     expect(out).toMatch(/script-src 'self' http:\/\/127\.0\.0\.1:5178 'unsafe-inline'/);
     expect(out).not.toMatch(/connect-src/i);
   });
+
+  it("appends 'unsafe-inline' to an explicit style-src (overlay shadow-DOM inline <style>)", () => {
+    const out = relaxCsp("style-src 'self'", "http://127.0.0.1:5178");
+    expect(out).toMatch(/style-src 'self' 'unsafe-inline'/);
+  });
+
+  it("synthesizes an explicit style-src (inheriting default-src) when style-src is absent", () => {
+    // A bare `default-src 'self'` leaves the overlay's inline <style> blocked — synthesize style-src.
+    const out = relaxCsp("default-src 'self'", "http://127.0.0.1:5178");
+    expect(out).toMatch(/style-src 'self' 'unsafe-inline'/);
+  });
+
+  it("does not synthesize a style-src when neither style-src nor default-src is present", () => {
+    // Inline styles were entirely unrestricted; synthesizing one would TIGHTEN the policy.
+    const out = relaxCsp("script-src 'self'", "http://127.0.0.1:5178");
+    expect(out).not.toMatch(/style-src/i);
+  });
 });
 
 describe("relaxSecurityHeaders", () => {

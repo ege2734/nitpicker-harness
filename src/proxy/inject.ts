@@ -154,6 +154,10 @@ export function relaxCsp(csp: string, sidecarOrigin: string): string {
     if (name === "connect-src") {
       return `${d} ${extra}`;
     }
+    // The overlay mounts a shadow DOM with an inline <style>; 'unsafe-inline' authorizes it. Additive only.
+    if (name === "style-src" || name === "style-src-elem") {
+      return `${d} 'unsafe-inline'`;
+    }
     // If there's no explicit script-src, the overlay script falls back to default-src — widen it so the
     // external overlay script isn't blocked (needs 'self' too, not just 'unsafe-inline').
     if (name === "default-src" && !hasScriptSrc) {
@@ -172,6 +176,18 @@ export function relaxCsp(csp: string, sidecarOrigin: string): string {
     if (defaultSrc) {
       const inherited = defaultSrc.split(/\s+/).slice(1).join(" ");
       relaxed.push(`connect-src ${inherited ? `${inherited} ` : ""}${extra}`);
+    }
+  }
+
+  // The overlay's inline <style> falls back to default-src when no style-src is present, which a bare
+  // `default-src 'self'` leaves too narrow — synthesize an explicit style-src that inherits default-src's
+  // sources plus 'unsafe-inline'. As with connect-src, if there's no default-src either then inline styles
+  // were entirely unrestricted; synthesizing here would TIGHTEN the policy, so leave styles untouched.
+  if (!names.includes("style-src")) {
+    const defaultSrc = directives.find((d) => d.split(/\s+/, 1)[0].toLowerCase() === "default-src");
+    if (defaultSrc) {
+      const inherited = defaultSrc.split(/\s+/).slice(1).join(" ");
+      relaxed.push(`style-src ${inherited ? `${inherited} ` : ""}'unsafe-inline'`);
     }
   }
 
