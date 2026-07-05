@@ -73,8 +73,24 @@ export function startHarness(opts: HarnessOptions): Promise<Harness> {
 
     if (contentType.includes("text/html")) {
       const chunks: Buffer[] = [];
+      let settled = false;
+      const onUpstreamError = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        log(`[nitpicker-harness] upstream HTML stream error: ${err.message}`);
+        if (res.headersSent) {
+          res.destroy();
+          return;
+        }
+        res.writeHead(502, { "content-type": "text/plain" });
+        res.end(`nitpicker-harness: upstream ${opts.target} failed mid-response (${err.message})`);
+      };
       proxyRes.on("data", (c: Buffer) => chunks.push(c));
+      proxyRes.on("error", onUpstreamError);
+      proxyRes.on("aborted", () => onUpstreamError(new Error("upstream aborted")));
       proxyRes.on("end", () => {
+        if (settled) return;
+        settled = true;
         let body = Buffer.concat(chunks).toString("utf8");
         body = rewriteAbsoluteUrls(body, targetOrigin, harnessOrigin);
         body = injectOverlay(body, injectCfg);
@@ -136,8 +152,6 @@ export function startHarness(opts: HarnessOptions): Promise<Harness> {
   });
 }
 
-let overlayError: string | null = null;
-
 async function serveOverlay(res: ServerResponse, log: (m: string) => void): Promise<void> {
   try {
     const js = await buildOverlay();
@@ -147,10 +161,10 @@ async function serveOverlay(res: ServerResponse, log: (m: string) => void): Prom
     });
     res.end(js);
   } catch (err) {
-    overlayError = (err as Error).message;
-    log(`[nitpicker-harness] overlay bundle failed: ${overlayError}`);
+    const message = (err as Error).message;
+    log(`[nitpicker-harness] overlay bundle failed: ${message}`);
     res.writeHead(500, { "content-type": "application/javascript" });
-    res.end(`console.error(${JSON.stringify(`nitpicker-harness overlay build failed: ${overlayError}`)});`);
+    res.end(`console.error(${JSON.stringify(`nitpicker-harness overlay build failed: ${message}`)});`);
   }
 }
 

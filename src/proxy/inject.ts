@@ -62,9 +62,17 @@ export function rewriteAbsoluteUrls(
   let out = html;
   for (const variant of originVariants(targetOrigin)) {
     if (variant === harnessOrigin) continue;
-    out = out.split(variant).join(harnessOrigin);
+    // Only rewrite an occurrence at a real URL boundary — the origin followed by a path/quote/whitespace/
+    // '<' or end-of-string — so `http://localhost:3000` doesn't corrupt the prefix of
+    // `http://localhost:30000/...` or unrelated text that merely contains the origin string.
+    const re = new RegExp(`${escapeRegExp(variant)}(?=[/"'\`\\s<>?#]|$)`, "g");
+    out = out.replace(re, harnessOrigin);
   }
   return out;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** localhost/127.0.0.1 and http/https spellings of an origin, so a target that emits either is caught. */
@@ -127,23 +135,30 @@ export function relaxCsp(csp: string, sidecarOrigin: string): string {
     // frame-ancestors blocks the harness from framing the page — drop it outright.
     .filter((d) => !/^frame-ancestors\b/i.test(d));
 
+  const names = directives.map((d) => d.split(/\s+/, 1)[0].toLowerCase());
+  const hasScriptSrc = names.includes("script-src");
+
   const relaxed = directives.map((d) => {
     const name = d.split(/\s+/, 1)[0].toLowerCase();
     if (name === "script-src" || name === "script-src-elem" || name === "connect-src") {
       return `${d} ${extra}`;
     }
+    // If there's no explicit script-src, the overlay script falls back to default-src — widen it so the
+    // script isn't blocked.
+    if (name === "default-src" && !hasScriptSrc) {
+      return `${d} ${extra}`;
+    }
     return d;
   });
 
-  // If the CSP relies on `default-src` (no explicit script-src/connect-src), widen that instead so the
-  // overlay script + sidecar fetch aren't blocked by the fallback.
-  const names = relaxed.map((d) => d.split(/\s+/, 1)[0].toLowerCase());
-  if (names.includes("default-src") && !names.includes("script-src") && !names.includes("connect-src")) {
-    for (let i = 0; i < relaxed.length; i++) {
-      if (relaxed[i].split(/\s+/, 1)[0].toLowerCase() === "default-src") {
-        relaxed[i] = `${relaxed[i]} ${extra}`;
-      }
-    }
+  // connect-src has its own fallback to default-src, which a bare `default-src 'self'` (or a policy that
+  // sets script-src but not connect-src) leaves too narrow for the overlay's POST to the sidecar. Always
+  // ensure an explicit connect-src carries the sidecar origin, inheriting default-src's sources when present.
+  if (!names.includes("connect-src")) {
+    const defaultSrc = directives.find((d) => d.split(/\s+/, 1)[0].toLowerCase() === "default-src");
+    const inherited = defaultSrc ? defaultSrc.split(/\s+/).slice(1).join(" ") : "";
+    relaxed.push(`connect-src ${inherited ? `${inherited} ` : ""}${extra}`);
   }
+
   return relaxed.join("; ");
 }

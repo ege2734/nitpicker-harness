@@ -84,6 +84,18 @@ describe("rewriteAbsoluteUrls", () => {
     const out = rewriteAbsoluteUrls(html, "http://localhost:3000", "http://127.0.0.1:4000");
     expect(out).toBe(html);
   });
+
+  it("does not rewrite a sibling origin that merely shares a port prefix", () => {
+    const html = `<a href="http://localhost:30000/x">sib</a>`;
+    const out = rewriteAbsoluteUrls(html, "http://localhost:3000", "http://127.0.0.1:4000");
+    expect(out).toBe(html);
+  });
+
+  it("rewrites a bare origin with no trailing path", () => {
+    const html = `origin is http://localhost:3000`;
+    const out = rewriteAbsoluteUrls(html, "http://localhost:3000", "http://127.0.0.1:4000");
+    expect(out).toBe("origin is http://127.0.0.1:4000");
+  });
 });
 
 describe("relaxCsp", () => {
@@ -104,6 +116,15 @@ describe("relaxCsp", () => {
   it("widens default-src when there is no explicit script/connect-src", () => {
     const out = relaxCsp("default-src 'self'", "http://127.0.0.1:5178");
     expect(out).toMatch(/default-src 'self' http:\/\/127\.0\.0\.1:5178 'unsafe-inline'/);
+  });
+
+  it("synthesizes an explicit connect-src (inheriting default-src) when connect-src is absent", () => {
+    const out = relaxCsp("default-src 'self'; script-src 'self'", "http://127.0.0.1:5178");
+    // script-src present, so default-src is NOT widened for scripts...
+    expect(out).toMatch(/script-src 'self' http:\/\/127\.0\.0\.1:5178 'unsafe-inline'/);
+    expect(out).toMatch(/default-src 'self'(;|$)/);
+    // ...but connect-src must still be synthesized so the overlay can reach the sidecar.
+    expect(out).toMatch(/connect-src 'self' http:\/\/127\.0\.0\.1:5178 'unsafe-inline'/);
   });
 });
 

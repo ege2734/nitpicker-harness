@@ -16,7 +16,12 @@ let cached: Promise<string> | null = null;
 
 /** Bundle the overlay entry into an IIFE string. Cached for the process lifetime. */
 export function buildOverlay(): Promise<string> {
-  if (!cached) cached = bundle();
+  if (!cached) {
+    cached = bundle().catch((err) => {
+      cached = null;
+      throw err;
+    });
+  }
   return cached;
 }
 
