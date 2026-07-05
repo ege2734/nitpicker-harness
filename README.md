@@ -59,7 +59,7 @@ nitpicker-harness shutdown [--endpoint <url>]
 ```
  browser ──▶  nitpicker-harness (:4000)  ──▶  target dev server (:3000)
                  │  rewrites text/html:  inject overlay <script>, rewrite absolute URLs,
-                 │  strip X-Frame-Options, relax CSP (frame-ancestors/script-src/connect-src)
+                 │  strip X-Frame-Options, relax CSP (frame-ancestors/script-src/connect-src/style-src)
                  │  forwards the HMR WebSocket (hot-reload survives)
                  │  serves /__nitpicker-harness/overlay.js  (esbuild IIFE, html2canvas inlined)
                  ▼
@@ -95,7 +95,7 @@ which also brings prod-safety gates. The harness's sweet spot is *no target chan
 - ✅ Element pick returns component (`FeedbackCard`) + selector + text + route.
 - ✅ Region + element + message batch drained by the `poll` CLI over the session-keyed sidecar.
 - ✅ HMR WebSocket forwarded — editing the source hot-reloads the proxied page, overlay intact.
-- ✅ `X-Frame-Options` stripped, CSP `frame-ancestors` dropped + `script-src`/`connect-src` relaxed.
+- ✅ `X-Frame-Options` stripped, CSP `frame-ancestors` dropped + `script-src`/`connect-src`/`style-src` relaxed.
 
 **Deferred (follow-ups, not blockers):**
 

@@ -5,9 +5,9 @@
 // Responsibilities:
 //   • injectOverlay  — splice the overlay <script> into a proxied HTML document
 //   • rewriteAbsoluteUrls — map absolute target-origin URLs in the HTML back through the harness origin
-//   • relaxSecurityHeaders — strip X-Frame-Options + CSP frame-ancestors and relax script-src/connect-src
-//                            so the page frames same-origin under the harness and the overlay can reach
-//                            the sidecar
+//   • relaxSecurityHeaders — strip X-Frame-Options + CSP frame-ancestors and relax
+//                            script-src/connect-src/style-src so the page frames same-origin under the
+//                            harness and the overlay can run, reach the sidecar, and style its shadow DOM
 //
 // The proxy path served for harness-internal assets. Chosen to be unlikely to collide with a target's
 // own routes.
@@ -98,8 +98,9 @@ function originVariants(origin: string): string[] {
  * injected overlay able to reach the sidecar:
  *   • delete `X-Frame-Options` (would block framing entirely)
  *   • from any `Content-Security-Policy`: drop `frame-ancestors` (blocks framing; modern browsers honor
- *     it over X-Frame-Options), and append the sidecar origin + `'unsafe-inline'`/`blob:` to
- *     `script-src`/`connect-src`/`default-src` so the overlay script runs and can POST feedback.
+ *     it over X-Frame-Options), widen `script-src`/`connect-src`/`default-src` with the sidecar origin +
+ *     `'unsafe-inline'`/`blob:`/`data:`, and add `'unsafe-inline'` to `style-src` so the overlay script
+ *     runs, can POST feedback, and its shadow-DOM inline styles apply.
  *
  * Mutates and returns the same headers object (Node's outgoing-header bag). Header names are matched
  * case-insensitively.
