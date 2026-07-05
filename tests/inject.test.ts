@@ -126,6 +126,14 @@ describe("relaxCsp", () => {
     // ...but connect-src must still be synthesized so the overlay can reach the sidecar.
     expect(out).toMatch(/connect-src 'self' http:\/\/127\.0\.0\.1:5178 'unsafe-inline'/);
   });
+
+  it("does not synthesize a connect-src when neither connect-src nor default-src is present", () => {
+    // Connections were entirely unrestricted; synthesizing one would TIGHTEN the policy and break the
+    // app's own fetch/XHR and same-origin HMR websocket.
+    const out = relaxCsp("script-src 'self'", "http://127.0.0.1:5178");
+    expect(out).toMatch(/script-src 'self' http:\/\/127\.0\.0\.1:5178 'unsafe-inline'/);
+    expect(out).not.toMatch(/connect-src/i);
+  });
 });
 
 describe("relaxSecurityHeaders", () => {

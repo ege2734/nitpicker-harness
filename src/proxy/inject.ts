@@ -151,13 +151,17 @@ export function relaxCsp(csp: string, sidecarOrigin: string): string {
     return d;
   });
 
-  // connect-src has its own fallback to default-src, which a bare `default-src 'self'` (or a policy that
-  // sets script-src but not connect-src) leaves too narrow for the overlay's POST to the sidecar. Always
-  // ensure an explicit connect-src carries the sidecar origin, inheriting default-src's sources when present.
+  // connect-src falls back to default-src, which a bare `default-src 'self'` (or a policy that sets
+  // script-src but not connect-src) leaves too narrow for the overlay's POST to the sidecar — synthesize an
+  // explicit connect-src that inherits default-src's sources plus the sidecar origin. But when there's no
+  // default-src to inherit from either, connections were entirely unrestricted; synthesizing one here would
+  // TIGHTEN the policy (breaking the app's own fetch/XHR and same-origin HMR), so leave connect untouched.
   if (!names.includes("connect-src")) {
     const defaultSrc = directives.find((d) => d.split(/\s+/, 1)[0].toLowerCase() === "default-src");
-    const inherited = defaultSrc ? defaultSrc.split(/\s+/).slice(1).join(" ") : "";
-    relaxed.push(`connect-src ${inherited ? `${inherited} ` : ""}${extra}`);
+    if (defaultSrc) {
+      const inherited = defaultSrc.split(/\s+/).slice(1).join(" ");
+      relaxed.push(`connect-src ${inherited ? `${inherited} ` : ""}${extra}`);
+    }
   }
 
   return relaxed.join("; ");
