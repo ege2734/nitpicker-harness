@@ -462,7 +462,7 @@ export class Overlay implements NitpickerHandle {
     if (this.frozenHolder === snapshot.holder) this.frozenHolder = null;
     this.pendingDockRasters++;
     return rasterizeFrozen(snapshot, this.scale)
-      .then(({ canvas }) => annotateRegion(canvas, rect, this.scale, this.appWidth()))
+      .then(({ canvas }) => annotateRegion(canvas, rect, this.scale, snapshot.viewport.w))
       .finally(() => {
         snapshot.holder.remove();
         this.pendingDockRasters--;
