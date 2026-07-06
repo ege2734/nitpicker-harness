@@ -482,10 +482,10 @@ class ShellChrome {
   }
 
   private onEditKey = (e: KeyboardEvent): void => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      // Single-line commit: don't insert a newline, blur to commit.
+    if (e.key === "Enter") {
+      // Truly single-line: never insert a newline. Plain Enter commits (blur); Shift+Enter is swallowed too.
       e.preventDefault();
-      (e.currentTarget as HTMLElement).blur();
+      if (!e.shiftKey) (e.currentTarget as HTMLElement).blur();
     } else if (e.key === "Escape") {
       e.preventDefault();
       this.editCancelled = true;
@@ -523,7 +523,13 @@ class ShellChrome {
       return;
     }
     const newText = normText(el);
-    if (!descriptor || newText === oldText) {
+    if (newText === oldText) {
+      // Unchanged — restore original markup so a no-op edit never leaves the preview normalized.
+      el.innerHTML = this.editOldHtml;
+      this.setStatus("");
+      return;
+    }
+    if (!descriptor) {
       this.setStatus("");
       return;
     }
