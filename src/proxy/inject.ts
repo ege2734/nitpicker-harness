@@ -67,6 +67,11 @@ export function shellPage(cfg: InjectConfig): string {
   .nh-hdr { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #23272e; }
   .nh-hdr .nh-title { font-weight: 600; letter-spacing: .2px; }
   .nh-hdr .nh-sess { margin-left: auto; font-size: 11px; color: #8b929c; }
+  /* Phase 2 — mode toolbar: switch the parent-driven interaction over the iframe (cursor / region / element). */
+  .nh-modes { display: inline-flex; gap: 2px; margin-left: 4px; padding: 2px; border-radius: 8px; background: #0e1114; border: 1px solid #23272e; }
+  .nh-mode { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #9aa2ac; cursor: pointer; font: inherit; font-size: 12px; line-height: 1; }
+  .nh-mode:hover { background: #1f242c; color: #e6e8eb; }
+  .nh-mode.nh-active { background: #2b5cff; color: #fff; }
   .nh-count {
     display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px;
     padding: 0 6px; border-radius: 10px; background: #2b5cff; color: #fff; font-size: 11px; font-weight: 600;
@@ -99,6 +104,11 @@ export function shellPage(cfg: InjectConfig): string {
   <aside id="nh-chat" aria-label="nitpicker feedback">
     <div class="nh-hdr">
       <span class="nh-title">nitpicker</span>
+      <span class="nh-modes" role="group" aria-label="feedback mode">
+        <button class="nh-mode nh-active" id="nh-mode-cursor" type="button" data-mode="cursor" title="Cursor — passive (Esc)" aria-label="Cursor mode">▧</button>
+        <button class="nh-mode" id="nh-mode-region" type="button" data-mode="region" title="Region — drag over the app to screenshot" aria-label="Region mode">⬚</button>
+        <button class="nh-mode" id="nh-mode-element" type="button" data-mode="element" title="Element — hover to outline, click to pick a component" aria-label="Element mode">◎</button>
+      </span>
       <span class="nh-count" id="nh-count">0</span>
       <span class="nh-sess">${sessionText}</span>
     </div>

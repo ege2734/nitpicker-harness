@@ -28,9 +28,12 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   chrome lives in the parent heap, it survives ANY navigation the iframe does — SPA route change, hard
   reload, even a cross-origin excursion — with **zero** extra work; persistence is structural (this is
   why the `nh-persist-nav` localStorage idea was dropped). Reuses `vendor/nitpicker/core/transport.ts` +
-  `types.ts` for the sidecar POST. Phase 1 is chat + send-to-sidecar only (no html2canvas/overlay engine;
-  those lift into the parent in Phases 2–4). The injected `overlay.js` "feedback proxy" mode stays as the
-  fallback for apps we don't control.
+  `types.ts` for the sidecar POST. **Phase 2 (landed)** added the interactive layer: element pick
+  (hover-outline + click → `baseDescriptor` + `resolveReactElement`, incl. component name) and region +
+  element screenshots (html2canvas run in the PARENT against the iframe content). All of it is driven from
+  the parent reading into the iframe via the reused engine's `Env` seam (below). `src/shell/geometry.ts`
+  holds the §5 single-offset coordinate math (pure, unit-tested). The injected `overlay.js` "feedback
+  proxy" mode stays as the fallback for apps we don't control.
 - `src/cli.ts` + `bin/nitpicker-harness` — CLI; spawns the vendored sidecar and starts the proxy. Also
   exposes `stop-hook` (the turn-end driver) and `pending` (cheap queued-count signal).
 - `src/hook.ts` — the **feedback driver**: a Claude-Code Stop-hook that parks on the sidecar's `/wait`
@@ -100,6 +103,36 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   own `@types/node` globally augments `process.env.NODE_ENV` to read-only; if `tsc` pulls its
   `next-env.d.ts`/`.next/**` in via `tests/**/*.ts`, that augmentation leaks and breaks the vendored
   `NODE_ENV=` test assignments program-wide. Keep the exclude.
+
+## Builder-shell interaction (Phase 2): the `Env` seam + the §5 single-offset rule
+
+- **The overlay engine is parameterized over a DOM `Env { doc, win }` handle** (`vendor/nitpicker/core/env.ts`)
+  so ONE engine serves both modes: injected mode reads the ambient globals (the default), the shell reads the
+  proxied iframe's `contentDocument`/`contentWindow`. Every ambient ref in `core/overlay.ts` + `core/region.ts`
+  routes through it; `redbox.ts`/`elements.ts`/`react/react-source.ts` were already ambient-free and are reused
+  verbatim. **Every seam defaults to ambient**, so the injected overlay is behavior-preserving — do NOT drop the
+  defaults. This is a harness-local delta (nitpicker is archived); preserve it on re-sync (see
+  `vendor/nitpicker/README.md`). Proved by `tests/env-seam.test.ts`.
+- **The geometry rule that keeps the parent highlight/red box exactly over the iframe (`src/shell/geometry.ts`,
+  report §5): translate iframe-content coords by the iframe's own offset (`frame.getBoundingClientRect()`)
+  EXACTLY ONCE** — add it content→parent (highlight placement), subtract it parent→content (drag point → capture
+  rect). The highlight is a `position:fixed` layer in the PARENT viewport, so the offset is added a single time;
+  the "double-offset" bug is applying it twice (e.g. a fixed layer AND nesting inside the already-offset stage).
+  Regression-guarded by `tests/shell-geometry.test.ts`. Because `getBoundingClientRect()` inside the iframe already
+  reflects the iframe's own scroll, the highlight tracks scroll for free once you re-run placement on the iframe's
+  `scroll` event — `src/shell/entry.ts` attaches iframe scroll+resize (and parent resize) listeners for exactly this.
+- **The shell's region capture crops NO gutter** (`appWidth = iframeWin.innerWidth`): unlike the injected dock,
+  the shell's chrome lives in the parent, not the iframe, so the iframe raster has nothing to crop. Pass a
+  detached parent `<div>` as `captureRegion`'s `hostEl` — it's never inside the iframe, so `ignoreElements`
+  is a no-op (passing the iframe body would exclude everything).
+- **The shell reuses the sidecar queue lifecycle, not the injected `Overlay` class** — element/region marks feed
+  `ShellChrome`'s existing Phase-1 queue + `Transport` (region `_pending`/`_blob` awaited on send, same as the
+  overlay). Mounting the full `Overlay` in the shell would double the chat/dock and fight the shell's flex layout;
+  the shell drives the parameterized engine primitives directly instead.
+- **Browser E2E needs Node ≥20.19** for `chrome-devtools-axi` (its `chrome-devtools-mcp` bridge). The repo's
+  default `node` may be older; `export PATH="$HOME/.nvm/versions/node/v22.*/bin:$PATH"` before driving the browser.
+  The `tests/fixtures/next16-app` (`PricingCard` → `[data-testid="pricing-Pro"]`) is the standard target: run it on
+  `:3111`, point the harness at it, open `/__nitpicker-harness/shell`.
 
 ## The feedback driver (idle agent → still gets driven)
 

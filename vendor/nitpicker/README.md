@@ -48,3 +48,15 @@ it is **not** upstreamed — preserve it on every re-sync (do NOT blind-copy `re
   needs, plus the per-session `drains` generation counter in `store.ts` (bumped only on a real delivery)
   that both endpoints report as the driver's loop guard. Draining stays exclusive to `/poll`, so these
   never race away an item. Marked in-file; preserve on re-sync.
+
+- **`core/env.ts` (new) + the `Env` seam through `core/overlay.ts` + `core/region.ts`** — the overlay
+  engine was written against the ambient `document`/`window` globals. The builder shell (`src/shell`) needs
+  the SAME engine to read a DIFFERENT document — the same-origin proxied `<iframe>`'s
+  `contentDocument`/`contentWindow` — while rendering the highlight + red box in the PARENT shell. So every
+  ambient `document.`/`window.` reference in `overlay.ts` and `region.ts` now routes through a passed-in
+  `Env { doc, win }` handle (`core/env.ts`, `ambientEnv()`), added to `NitpickerOptions.env`. **Every seam
+  defaults to the ambient env**, so injected mode (`src/overlay`) is byte-for-byte behavior-preserving; the
+  shell passes the iframe's env (`captureRegion(rect, scale, host, appWidth, env)` etc.). `core/redbox.ts`
+  and `core/elements.ts` were listed for this pass but are already ambient-free (element/canvas-relative
+  math only), so they're reused verbatim — as are `react/react-source.ts` (fiber walk off the passed node).
+  Covered by `tests/env-seam.test.ts`. Preserve on re-sync (same rule as the deltas above).
