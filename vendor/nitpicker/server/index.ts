@@ -4,9 +4,19 @@
 //   POST /blob        raw binary screenshot upload → { id, path, url }   (keeps images out of JSON)
 //   POST /feedback    enqueue one item or a batch { session, items:[…] }
 //   GET  /poll        agent long-poll: DRAINS the queue, heartbeats ~15s, indefinite by default
+//   GET  /pending     cheap, synchronous signal: { pending: <queued count>, drains: <gen> } — no drain
+//   GET  /wait        agent-driver long-poll: resolves { status:"pending", pending, drains } the instant
+//                     the queue is non-empty; NEVER drains. Backs the Stop-hook waker (see src/hook.ts).
 //   GET  /blob/:id    serve a stored blob (fallback to the file path the item already carries)
 //   GET  /health      liveness
 //   POST /shutdown    stop the process
+//
+// HARNESS-LOCAL DELTA: /pending and /wait are additions the harness needs to *drive an idle agent*
+// (a Stop-hook parks on /wait with zero token cost and wakes the agent the instant a mark lands). They
+// are non-draining by design, so the exactly-once drain guarantee still lives solely on /poll. Both
+// carry the session's `drains` generation (store.drainCount) so the driver can tell a genuinely-new
+// batch (drains advanced) from one the agent ignored (drains unchanged) — that is the hook's loop
+// guard. When re-syncing vendor/nitpicker/, preserve these two handlers and the drains field.
 //
 // Session identity is a caller-supplied string (project/session id), never a file path. Zero
 // third-party deps: node:http only, so nothing here can ever leak into the app or prod.
@@ -136,6 +146,64 @@ function handlePoll(req: IncomingMessage, res: ServerResponse, url: URL): void {
   });
 }
 
+/**
+ * Non-draining long-poll used to *drive* an idle agent. Resolves as soon as the session has any queued
+ * feedback (fast-path if already pending, otherwise parks and wakes on the next enqueue). Crucially it
+ * only PEEKS the queue — draining stays exclusive to /poll, so this can never race away an item. A
+ * Stop-hook blocks here at zero token cost; when it resolves it re-invokes the agent, which then drains
+ * via `poll`. `timeoutMs` (0 => indefinite) lets the caller cap the wait under its own hook deadline.
+ */
+function handleWait(req: IncomingMessage, res: ServerResponse, url: URL): void {
+  const session = url.searchParams.get("session");
+  if (!session) return json(res, 400, { error: "missing session" });
+  const timeoutMs = Number(url.searchParams.get("timeoutMs")) || 0; // 0 => indefinite
+
+  // Fast path: already pending → answer immediately.
+  const pending = store.size(session);
+  if (pending > 0)
+    return json(res, 200, { status: "pending", pending, drains: store.drainCount(session) });
+
+  // Park. Same heartbeat shape as /poll so the client's JSON.parse ignores keepalive whitespace.
+  cors(res);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded) res.write(" ");
+  }, HEARTBEAT_MS);
+
+  let done = false;
+  const finish = (payload: unknown): void => {
+    if (done) return;
+    done = true;
+    clearInterval(heartbeat);
+    unsubscribe();
+    if (timer) clearTimeout(timer);
+    if (!res.writableEnded) res.end(JSON.stringify(payload));
+  };
+
+  const unsubscribe = store.onFeedback(session, () => {
+    if (res.writableEnded || req.destroyed) return;
+    const n = store.size(session);
+    // peek only — never drains
+    if (n > 0) finish({ status: "pending", pending: n, drains: store.drainCount(session) });
+  });
+
+  const timer =
+    timeoutMs > 0
+      ? setTimeout(
+          () => finish({ status: "timeout", pending: 0, drains: store.drainCount(session) }),
+          timeoutMs,
+        )
+      : null;
+
+  req.on("close", () => {
+    if (done) return;
+    done = true;
+    clearInterval(heartbeat);
+    unsubscribe();
+    if (timer) clearTimeout(timer);
+  });
+}
+
 function handleBlobGet(res: ServerResponse, id: string): void {
   const blob = readBlob(id);
   if (!blob) return json(res, 404, { error: "not found" });
@@ -162,6 +230,12 @@ const server = createServer((req, res) => {
       if (method === "POST" && url.pathname === "/blob") return await handleBlob(req, res);
       if (method === "POST" && url.pathname === "/feedback") return await handleFeedback(req, res);
       if (method === "GET" && url.pathname === "/poll") return handlePoll(req, res, url);
+      if (method === "GET" && url.pathname === "/pending") {
+        const session = url.searchParams.get("session");
+        if (!session) return json(res, 400, { error: "missing session" });
+        return json(res, 200, { pending: store.size(session), drains: store.drainCount(session) });
+      }
+      if (method === "GET" && url.pathname === "/wait") return handleWait(req, res, url);
       if (method === "GET" && url.pathname.startsWith("/blob/")) {
         return handleBlobGet(res, decodeURIComponent(url.pathname.slice("/blob/".length)));
       }

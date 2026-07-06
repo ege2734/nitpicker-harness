@@ -45,11 +45,22 @@ npm run poll -- --session nitpicker
 `poll` prints a batch and exits (add `--watch` to keep receiving). Each item is a `region` (local PNG
 path, red box burned in), an `element` (component/selector/text/route), or a `message`.
 
+### Keep the agent driven
+
+`poll` only delivers while the agent is actively running it — once a turn ends and the agent goes idle,
+new marks sit in the sidecar and nothing wakes it. To make feedback **drive** the agent, install the
+turn-end **Stop hook**: it parks on the sidecar at zero token cost and re-invokes the agent the instant a
+mark lands (a blocking watcher + turn-end trigger). See [`SKILL.md`](./SKILL.md) →
+"Keep the agent driven" for the one-time `.claude/settings.json` snippet. The feedback queue is durable —
+a mark queued while nothing is polling is never lost; it is delivered to the next poll.
+
 ### CLI
 
 ```
 nitpicker-harness --target <url> [--port 4000] [--session nitpicker] [--sidecar-port 5178] [--no-sidecar]
 nitpicker-harness poll --session <id> [--endpoint <url>] [--watch]
+nitpicker-harness stop-hook --session <id> [--endpoint <url>] [--timeoutMs <n>]   # turn-end driver hook
+nitpicker-harness pending --session <id> [--endpoint <url>]                       # cheap "is feedback queued?"
 nitpicker-harness health [--endpoint <url>]
 nitpicker-harness shutdown [--endpoint <url>]
 ```
@@ -64,6 +75,8 @@ nitpicker-harness shutdown [--endpoint <url>]
                  │  serves /__nitpicker-harness/overlay.js  (esbuild IIFE, html2canvas inlined)
                  ▼
              sidecar (:5178)  ◀── overlay POSTs feedback ──   agent `poll` drains it
+                   ▲                                            ▲
+                   └── Stop-hook parks on /wait (0 tokens) ─────┘  wakes the agent the instant a mark lands
 ```
 
 - **`src/proxy/`** — the reverse proxy. `inject.ts` is the pure HTML/header rewriting (unit-tested);
@@ -94,6 +107,8 @@ which also brings prod-safety gates. The harness's sweet spot is *no target chan
 - ✅ Region screenshot rasterizes the app DOM with the red box (verified PNG).
 - ✅ Element pick returns component (`FeedbackCard`) + selector + text + route.
 - ✅ Region + element + message batch drained by the `poll` CLI over the session-keyed sidecar.
+- ✅ Feedback **drives** an idle agent: a turn-end Stop hook parks on the sidecar's non-draining `/wait`
+  at zero token cost and re-invokes the agent the instant a mark lands (durable queue → never lost).
 - ✅ HMR WebSocket forwarded — editing the source hot-reloads the proxied page, overlay intact.
 - ✅ `X-Frame-Options` stripped, CSP `frame-ancestors` dropped + `script-src`/`connect-src`/`style-src` relaxed.
 

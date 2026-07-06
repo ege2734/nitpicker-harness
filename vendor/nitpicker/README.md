@@ -21,7 +21,9 @@ What's here and how the harness uses it:
 - **`react/dev-overlay.tsx`** — the Next/React `"use client"` mount used by the *install* skill. Kept
   for reference only; the harness injects its own mount and does not use this file (it imports `react`,
   which the harness doesn't depend on).
-- **`server/`** — the local sidecar transport (`node:http` only). The harness CLI spawns this unchanged.
+- **`server/`** — the local sidecar transport (`node:http` only). The harness CLI spawns it; it also
+  carries a harness-local delta (the `/pending` + `/wait` endpoints and the `drains` counter — see
+  "Local modifications" below) that backs the feedback driver.
 - **`cli/poll.ts`, `cli/verify.ts`** — the agent's long-poll client and the prod-leak scanner. `poll` is
   reused by `nitpicker-harness poll`.
 - **`next/`** — the dev-only Babel source-stamp loader/plugin. Not on the harness's default path;
@@ -34,9 +36,14 @@ What's here and how the harness uses it:
 
 Kept as close to upstream as possible. This is a **harness-local delta**: nitpicker is being archived, so
 it is **not** upstreamed — preserve it on every re-sync (do NOT blind-copy `react-source.ts` /
-`react-source.test.ts` from upstream):
+`react-source.test.ts`, `server/index.ts`, or `server/store.ts` from upstream):
 
 - **`react/react-source.ts`** — the fiber walk now also reads the component name off React 19's
   `_debugOwner` **owner-info** object (name on `.name`, no `.type`), in addition to the pre-19 fiber
   `.type` path. Without this, element-pick returned no `component` on React 19 (verified against React
   19.0). Covered by an added case in `tests/react-source.test.ts`.
+- **`server/index.ts` + `server/store.ts`** — the non-draining `GET /pending` (cheap queued count) and
+  `GET /wait` (long-poll that resolves the instant the queue is non-empty) endpoints the feedback driver
+  needs, plus the per-session `drains` generation counter in `store.ts` (bumped only on a real delivery)
+  that both endpoints report as the driver's loop guard. Draining stays exclusive to `/poll`, so these
+  never race away an item. Marked in-file; preserve on re-sync.
