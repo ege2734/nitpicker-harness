@@ -5,6 +5,11 @@ Code **copied verbatim** from [nitpicker](https://github.com/ege2734/nitpicker)
 nitpicker repo. nitpicker-harness will become the canonical home for this code when nitpicker is
 archived.
 
+**Vendored from nitpicker `main` @ `a8d109b`** — includes the docked feedback pane, the region-mode
+fixes (full-viewport red-box coordinate space, instant draw, Queue-time async raster, click-to-view/edit
+item modal, click-no-drag cancel) and the region-speed work (instant `Cmd/Ctrl+Shift+X` mode switch via
+deferred raster + "freezing viewport…" cue). When re-syncing, keep the local `react-source` delta below.
+
 What's here and how the harness uses it:
 
 - **`core/`** — `@nitpicker/core`, the framework-agnostic overlay (dock, region capture + red-box

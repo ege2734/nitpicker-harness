@@ -48,9 +48,28 @@ export const CSS = `
 .np-snapshot.np-show { display: block; }
 .np-snapshot canvas { position: fixed; top: 0; left: 0; }
 
+/* Instant "freezing viewport…" cue shown on the ⌘/Ctrl+Shift+X keypress. It paints on the very next
+   frame — before the (~1–2s on a heavy DOM) html2canvas raster's synchronous block — so that intrinsic
+   wait reads as an intentional "freezing" step, not a broken/janky UI. Hidden the moment the frozen
+   snapshot lands (or the user bails). Pointer-events:none so it never eats the drag. */
+.np-freeze-cue { position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+  display: none; align-items: center; gap: 7px; pointer-events: none; z-index: 2;
+  background: rgba(20,20,26,.92); color: #e6e6ea; font-size: 12px; line-height: 1;
+  padding: 7px 12px; border-radius: 999px; border: 1px solid #34343c;
+  box-shadow: 0 4px 16px rgba(0,0,0,.45); }
+.np-freeze-cue.np-show { display: flex; }
+.np-freeze-cue::before { content: ""; width: 11px; height: 11px; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.28); border-top-color: #ff3b30;
+  animation: np-cue-spin .7s linear infinite; }
+@keyframes np-cue-spin { to { transform: rotate(360deg); } }
+
 /* ---- freeze layer + queue card ---- */
 .np-freeze { position: fixed; inset: 0; pointer-events: none; display: none; }
 .np-freeze.np-show { display: block; }
+/* The view/edit modal must sit ABOVE the docked pane (which paints later in DOM order); its backdrop
+   then covers the full viewport, including the pane, so the modal is never obscured or click-blocked.
+   Only the modal sets this — the capture card intentionally stays in the app area under the pane. */
+.np-freeze.np-over-pane { z-index: 1; }
 .np-freeze canvas { position: fixed; top: 0; left: 0; }
 /* transparent click-catcher behind the element-mode card (region uses its opaque canvas instead). */
 .np-backdrop { position: fixed; inset: 0; pointer-events: auto; background: rgba(0,0,0,.02); }
@@ -61,28 +80,66 @@ export const CSS = `
   font: inherit; font-size: 13px; }
 .np-card .np-actions { display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end; }
 
-/* ---- chat panel ---- */
+/* ---- view/edit modal (click a queued item) ---- */
+.np-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(560px, 90vw); max-height: 86vh; overflow-y: auto; background: #1e1e24;
+  border: 1px solid #34343c; border-radius: 12px; padding: 14px; box-shadow: 0 8px 32px rgba(0,0,0,.6);
+  pointer-events: auto; display: flex; flex-direction: column; gap: 10px; color: #e6e6ee; }
+.np-modal-head { display: flex; align-items: center; justify-content: space-between;
+  font-weight: 600; font-size: 13px; }
+.np-modal-body { display: flex; flex-direction: column; }
+.np-modal-img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid #34343c;
+  background: #000; }
+.np-modal-note { color: #9a9aa5; font-size: 12px; padding: 20px; text-align: center;
+  border: 1px dashed #34343c; border-radius: 8px; }
+.np-modal-desc { font-family: ui-monospace, monospace; font-size: 12px; color: #9aa5ff;
+  white-space: pre-wrap; word-break: break-word; background: #14141a; border: 1px solid #2a2a31;
+  border-radius: 8px; padding: 10px; }
+.np-modal textarea { width: 100%; box-sizing: border-box; min-height: 60px; resize: vertical;
+  background: #14141a; color: #eee; border: 1px solid #34343c; border-radius: 8px; padding: 8px;
+  font: inherit; font-size: 13px; }
+.np-modal .np-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ---- chat pane: a DOCKED sidebar (not an overlay). It's always in the layout; shown/hidden by sliding
+   it in/out. When shown, the overlay also reserves its width on <html> (margin-right) so the host app
+   reflows beside it — the pane never covers app content. ---- */
 .np-panel { position: fixed; top: 0; right: 0; height: 100%; width: var(--np-panel-w); background: #17171c;
   border-left: 1px solid #34343c; box-shadow: -8px 0 24px rgba(0,0,0,.35); pointer-events: auto;
-  display: none; flex-direction: column; color: #e6e6ee; }
-.np-panel.np-open { display: flex; }
+  display: flex; flex-direction: column; color: #e6e6ee;
+  transform: translateX(100%); transition: transform .2s ease; }
+.np-panel.np-shown { transform: translateX(0); }
+/* While a capture/queue card is open the pane is inert: interacting with it (or toggling it hidden)
+   would reflow the app and desync the queued screenshot from its selection box. */
+.np-panel.np-locked { pointer-events: none; }
+.np-panel.np-locked::after { content: ""; position: absolute; inset: 0; background: rgba(0,0,0,.18);
+  pointer-events: auto; cursor: not-allowed; }
 
-/* ---- narrow viewports: reflow the right panel into a bottom sheet so it and the dock
-   never overlap (the shifted-left dock would otherwise run off the left edge) ---- */
+/* ---- narrow viewports: the pane drops to a bottom sheet (no horizontal reservation — the overlay
+   reserves 0 width here so the app keeps full width) so it and the dock never fight for space. ---- */
 @media (max-width: 720px) {
-  .np-panel { top: auto; bottom: 0; width: 100%; height: 70vh;
-    border-left: none; border-top: 1px solid #34343c; box-shadow: 0 -8px 24px rgba(0,0,0,.35); }
+  .np-panel { top: auto; bottom: 0; right: 0; width: 100%; height: 70vh;
+    border-left: none; border-top: 1px solid #34343c; box-shadow: 0 -8px 24px rgba(0,0,0,.35);
+    transform: translateY(100%); }
+  .np-panel.np-shown { transform: translateY(0); }
   /* dock stays bottom-CENTER but rides just above the bottom sheet */
   .np-dock.np-shift { transform: translateX(-50%); bottom: calc(70vh + 12px); }
 }
-.np-panel-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px;
+.np-panel-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px;
   border-bottom: 1px solid #2a2a31; font-weight: 600; font-size: 13px; }
+/* hide/show toggle at the pane's top-left */
+.np-pane-toggle { border: none; background: transparent; color: #b8b8c4; cursor: pointer;
+  font-size: 15px; line-height: 1; padding: 2px 6px; border-radius: 6px; }
+.np-pane-toggle:hover { background: #2c2c35; color: #fff; }
 .np-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 .np-empty { color: #71717a; font-size: 12px; text-align: center; margin-top: 24px; white-space: pre-line; }
 .np-item { display: flex; gap: 8px; background: #1e1e24; border: 1px solid #2a2a31; border-radius: 8px;
-  padding: 8px; }
+  padding: 8px; cursor: pointer; }
+.np-item:hover { border-color: #3b5bdb; background: #22222b; }
 .np-item img { width: 56px; height: 40px; object-fit: cover; border-radius: 4px; flex: none;
   background: #000; }
+/* thumbnail placeholder while a region raster is still in flight (or on failure) */
+.np-item-thumb-ph { width: 56px; height: 40px; border-radius: 4px; flex: none; background: #14141a;
+  border: 1px dashed #34343c; display: grid; place-items: center; color: #71717a; font-size: 14px; }
 .np-item-body { flex: 1; min-width: 0; }
 .np-item-kind { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #8a8a99; }
 .np-item-text { font-size: 12px; color: #e6e6ee; word-break: break-word;

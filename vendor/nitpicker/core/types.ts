@@ -51,6 +51,11 @@ export interface QueueItem {
   _blob?: Blob;
   /** client-only: a small data-URL thumbnail for the chat panel. */
   _thumb?: string;
+  /** client-only: in-flight region raster (dock path rasterizes at Queue time). `send()` awaits it so the
+   *  blob is attached before upload; `renderQueue` shows a "capturing…" placeholder until it resolves. */
+  _pending?: Promise<void>;
+  /** client-only: set if the region raster failed, so the UI can show it instead of a silent empty mark. */
+  _error?: string;
 }
 
 export interface NitpickerOptions {
@@ -69,9 +74,13 @@ export interface NitpickerHandle {
 }
 
 /** Strip client-only fields before the item goes on the wire. */
-export function serializeItem(item: QueueItem): Omit<QueueItem, "_blob" | "_thumb"> {
-  const { _blob, _thumb, ...wire } = item;
+export function serializeItem(
+  item: QueueItem,
+): Omit<QueueItem, "_blob" | "_thumb" | "_pending" | "_error"> {
+  const { _blob, _thumb, _pending, _error, ...wire } = item;
   void _blob;
   void _thumb;
+  void _pending;
+  void _error;
   return wire;
 }
