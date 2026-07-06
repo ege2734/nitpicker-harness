@@ -22,8 +22,11 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   `/__nitpicker-harness/overlay.js`. Config (session/endpoint) rides on the script URL's query string —
   no inline script, so a strict `script-src 'self'` still runs it.
 - `src/cli.ts` + `bin/nitpicker-harness` — CLI; spawns the vendored sidecar and starts the proxy.
-- `vendor/nitpicker/` — code copied verbatim from nitpicker (see `vendor/nitpicker/README.md`). This
-  repo is self-contained and must not depend back on the nitpicker repo.
+- `vendor/nitpicker/` — code copied verbatim from nitpicker (see `vendor/nitpicker/README.md`), last
+  synced from nitpicker `main` @ `a8d109b`. This repo is self-contained and must not depend back on the
+  nitpicker repo. nitpicker is being archived, so this is the canonical home — do not upstream back.
+- `docs/` — background research: `viability-report.md` (the same-origin-proxy design authority) and
+  `competitive-landscape.md` (prior-art scan). `docs/README.md` indexes them.
 
 ## Sharp edges (learned the hard way)
 
@@ -32,7 +35,9 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   The default env stays jsdom for the DOM-facing core units.
 - **React 19 `_debugOwner` is owner-info, not a fiber.** The component name lives on `.name` (no
   `.type`). `vendor/nitpicker/react/react-source.ts` was patched to read both shapes; without it
-  element-pick returns no `component` on React 19. Upstream this to nitpicker.
+  element-pick returns no `component` on React 19. This is a **harness-local delta upstream lacks** —
+  when re-syncing `vendor/nitpicker/`, do NOT blind-copy `react-source.ts`/`react-source.test.ts`;
+  preserve this patch (the rest of both files tracks upstream verbatim).
 - **Overlay bundle is cached in-process** (`build.ts`). After editing the overlay or vendored core,
   **restart the harness** — a reload alone serves the stale cached bundle.
 - **Sidecar port conflicts:** default 5178 is shared with any running nitpicker install. Use
