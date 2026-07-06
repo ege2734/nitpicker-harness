@@ -1,0 +1,19 @@
+{
+  "name": "nh-next16-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Minimal Next 16 / React 19 app used to reproduce + regression-test proxy hydration/HMR (Phase 0).",
+  "scripts": {
+    "dev": "next dev"
+  },
+  "dependencies": {
+    "next": "16.2.10",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "@types/react": "^19.0.0",
+    "@types/node": "^22.10.0"
+  }
+}

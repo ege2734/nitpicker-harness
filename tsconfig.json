@@ -28,6 +28,7 @@
     "node_modules",
     "vendor/nitpicker/react/dev-overlay.tsx",
     "vendor/nitpicker/next/**",
-    "**/*.cjs"
+    "**/*.cjs",
+    "tests/fixtures/**"
   ]
 }
