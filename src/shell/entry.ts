@@ -543,12 +543,21 @@ class ShellChrome {
         chip.textContent = item._thumb ? "region ✓" : item._error ? "region ✕" : "region · capturing…";
         row.appendChild(chip);
       } else if (item.kind === "element" && item.element) {
+        const el = item.element;
         const chip = document.createElement("span");
         chip.className = "nh-item-route";
-        chip.textContent = item.element.component
-          ? `⬡ ${item.element.component}`
-          : item.element.selector ?? "element";
+        chip.textContent = el.component ? `⬡ ${el.component}` : el.selector ?? "element";
         row.appendChild(chip);
+        // Prefer the exact build-stamped `file:line:col` when present (owned-build-only opt-in — see the
+        // README/SKILL source-stamp wiring): surface it as its own chip so the agent's grep target is
+        // visible at a glance. It already rides the wire via `serializeItem(item).element.source`; this is
+        // purely the UI surfacing. Absent (no loader) → the component + selector chips stand alone.
+        if (el.source) {
+          const src = document.createElement("span");
+          src.className = "nh-item-route nh-item-source";
+          src.textContent = el.source;
+          row.appendChild(src);
+        }
       }
 
       row.appendChild(document.createTextNode(item.text || "(no note)"));
