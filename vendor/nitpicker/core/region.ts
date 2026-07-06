@@ -120,6 +120,13 @@ export function buildFrozenClone(hostEl: Element, appWidthCss: number = window.i
   copyFormState(clone);
   // Structure-mutating canvas swap runs LAST, so the doc-order-dependent passes above see an intact clone.
   const decode = freezeCanvases(clone);
+  // A prior capture's frozen holder can still be attached to the live body (its deferred raster hasn't
+  // settled and the card is closed, so the np-show guard doesn't block a second hotkey press) and was
+  // deep-cloned above. Being position:fixed + opaque, left nested it would repaint the whole app in this
+  // fresh clone (and its deferred raster) with the stale prior snapshot. Strip it now — AFTER the doc-order
+  // pairing passes above, which ran against the still-identical live/clone trees so their alignment held;
+  // any stored clone reference that falls inside the removed subtree is simply never applied.
+  clone.querySelectorAll('[data-nitpicker="frozen"]').forEach((n) => n.remove());
 
   const holder = document.createElement("div");
   holder.setAttribute("data-nitpicker", "frozen");
