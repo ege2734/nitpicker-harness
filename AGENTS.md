@@ -127,6 +127,26 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   own `@types/node` globally augments `process.env.NODE_ENV` to read-only; if `tsc` pulls its
   `next-env.d.ts`/`.next/**` in via `tests/**/*.ts`, that augmentation leaks and breaks the vendored
   `NODE_ENV=` test assignments program-wide. Keep the exclude.
+- **`Overlay.appWidth()` measures `documentElement.clientWidth`, NOT `window.innerWidth`** — clientWidth
+  EXCLUDES a classic (non-overlay) scrollbar's gutter, innerWidth includes it. The frozen-region clone,
+  the drag clamp/dim-bands, and the pane crop all lay out against appWidth, so with innerWidth the
+  hotkey-freeze clone was `scrollbarWidth` px too wide and the opaque snapshot appeared to SHIFT the page
+  when it replaced the live view (only with classic scrollbars — macOS overlay scrollbars are 0-width, so
+  it reproduces only where the dev has "always show scrollbars" on / on Win-Linux). It's cached in
+  `viewportContentW`, refreshed ONLY at mount / resize / drag-start / freeze-entry (never per-mousemove —
+  reading clientWidth forces a synchronous layout). Falls back to innerWidth when clientWidth is 0
+  (jsdom/pre-layout), so unit tests + overlay-scrollbar browsers are behavior-identical. Note
+  `documentElement.clientWidth` is a special case that returns the viewport width (minus scrollbar)
+  regardless of the pane's `<html>` margin-right — verified in-browser. Regression-guarded in
+  `tests/region-persist.test.ts`.
+- **The region selection visual (dim bands + red outline) PERSISTS after mouse-up** until the queue card
+  is committed (Queue) or dismissed (Cancel/Esc/backdrop) — so the user sees what they framed while
+  composing. `onDragEnd`/`captureFrozen` deliberately DON'T `clearDrag()` (they only null the drag
+  *state*, already done); `unfreeze()` is the SINGLE teardown point (it now calls `clearDrag()`), so every
+  card-close path clears the selection exactly once. Reverting any of these re-introduces the "selection
+  vanishes on release" bug. This is the injected-overlay flow only; the builder-shell queues a region
+  immediately on release (no compose card), so it has no persistent-selection state. Guarded in
+  `tests/region-persist.test.ts`.
 
 ## Builder-shell interaction (Phase 2): the `Env` seam + the §5 single-offset rule
 
