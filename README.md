@@ -115,10 +115,14 @@ nitpicker-harness shutdown [--endpoint <url>]
 
 A proxy sees the dev server's already-compiled output, so it can't manufacture exact source locations
 for an arbitrary app. **`component` + `selector` + `text` + `route` are the baseline** (and are enough
-for an agent to grep to the code). Exact `file:line:col` is an **opt-in**: add the vendored dev-only
-source-stamp loader (`vendor/nitpicker/next/`) to the target's `next.config` — the one target-side line.
-If you can add that, prefer the full [nitpicker install skill](https://github.com/ege2734/nitpicker),
-which also brings prod-safety gates. The harness's sweet spot is *no target changes at all*.
+for an agent to grep to the code) — **apps without the stamp keep working, just without `file:line`.**
+Exact `file:line:col` is an **owned-build-only opt-in**: wire the vendored dev-only source-stamp loader
+(`vendor/nitpicker/next/`) into the target's `next.config` — one config block, no source edits. Once
+wired, the picker prefers `source` and it rides both the builder-shell chat item and the drained `poll`
+payload (e.g. `source: "app/pricing-card.tsx:9:5"`). The exact one-liner (Turbopack `turbopack.rules` +
+webpack fallback, both gated on `NODE_ENV`) is in [SKILL.md](./SKILL.md#opt-in-exact-filelinecol-source-owned-build-only).
+If you can add it, prefer the full [nitpicker install skill](https://github.com/ege2734/nitpicker),
+which also brings prod-safety gates. The harness's sweet spot is still *no target changes at all*.
 
 ## Status: Phase 1 (localhost dev proxy) — done vs. deferred
 
@@ -138,6 +142,9 @@ which also brings prod-safety gates. The harness's sweet spot is *no target chan
   hard reload, and a cross-origin excursion, and its batch drains via `poll`. The interactive layer runs
   from the parent too — region drag → screenshot and element pick → component/selector read out of the
   iframe and rendered over it (Phase 2).
+- ✅ Owned-build `file:line:col` provenance (Phase 3): a one-line `next.config` opt-in (the vendored
+  dev-only source-stamp loader) makes the picker surface `source` in the chat item **and** the drained
+  `poll` payload; apps without it degrade gracefully to component + selector + text + route.
 
 **Deferred (follow-ups, not blockers):**
 

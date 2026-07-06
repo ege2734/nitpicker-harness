@@ -80,6 +80,7 @@ export function shellPage(cfg: InjectConfig): string {
   .nh-empty { color: #6b727c; font-style: italic; padding: 8px 2px; }
   .nh-item { position: relative; padding: 8px 28px 8px 10px; border: 1px solid #262b33; border-radius: 8px; background: #1a1e24; white-space: pre-wrap; word-break: break-word; }
   .nh-item .nh-item-route { display: block; margin-top: 4px; font-size: 10px; color: #6b727c; }
+  .nh-item .nh-item-source { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #8a93a0; }
   .nh-item .nh-del { position: absolute; top: 4px; right: 6px; border: 0; background: transparent; color: #6b727c; cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; }
   .nh-item .nh-del:hover { color: #e06c6c; }
   .nh-compose { border-top: 1px solid #23272e; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }

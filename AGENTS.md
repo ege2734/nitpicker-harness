@@ -33,7 +33,13 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   element screenshots (html2canvas run in the PARENT against the iframe content). All of it is driven from
   the parent reading into the iframe via the reused engine's `Env` seam (below). `src/shell/geometry.ts`
   holds the §5 single-offset coordinate math (pure, unit-tested). The injected `overlay.js` "feedback
-  proxy" mode stays as the fallback for apps we don't control.
+  proxy" mode stays as the fallback for apps we don't control. **Phase 3 (landed)** made `file:line:col`
+  source provenance a first-class **owned-build-only** opt-in: the shell chat item surfaces `source` as
+  its own `nh-item-source` chip and it already rides the wire (`serializeItem` carries the whole
+  `element`, so no transport change was needed — Phase 3 is UI surfacing + docs + confirming the stamp
+  under Next 16). Apps without the build stamp degrade to `component + selector + text + route` with no
+  error. The one-line `next.config` wiring is documented in `SKILL.md` / `README.md`; the build-time
+  stamp is regression-tested in `tests/source-stamp.test.ts`.
 - `src/cli.ts` + `bin/nitpicker-harness` — CLI; spawns the vendored sidecar and starts the proxy. Also
   exposes `stop-hook` (the turn-end driver) and `pending` (cheap queued-count signal).
 - `src/hook.ts` — the **feedback driver**: a Claude-Code Stop-hook that parks on the sidecar's `/wait`

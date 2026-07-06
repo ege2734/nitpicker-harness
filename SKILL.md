@@ -123,19 +123,55 @@ Cheap manual signal if you ever want to check by hand: `npx nitpicker-harness pe
 The queue survives a killed/re-issued poll (cleared only on actual delivery), so feedback is never lost
 — just re-run `poll` if it dies before the human hits Send.
 
-## Opt-in: exact `file:line:col` source (the one thing that isn't free)
+## Opt-in: exact `file:line:col` source (owned-build-only)
 
 A proxy sees the dev server's already-compiled output, so it cannot manufacture source locations for an
 arbitrary app. `component` + `selector` + `text` + `route` are the baseline and are enough to grep to
-the code. To also get exact `file:line:col`, add the vendored dev-only stamp to the **target's** bundler
-(this is the only target-side change, and it's one config block, no source edits):
+the code — **apps without the stamp work exactly as before, just without `file:line`.** For an app whose
+build you **control**, you can also get exact `file:line:col` by wiring the vendored dev-only stamp into
+the **target's** `next.config`. This is the only target-side change — one config block, no source edits —
+and it feeds `source` into both the builder-shell chat item and the drained `poll` payload.
 
-- Copy `vendor/nitpicker/next/` into the target and wire `nitpicker-source-loader.cjs` into
-  `next.config` under `turbopack.rules` / `webpack`, gated on `NODE_ENV !== "production"` (see
-  `vendor/nitpicker/next/` and the original nitpicker SKILL for the exact snippet).
+**One-line wiring** (copy `vendor/nitpicker/next/` into the target, e.g. `<target>/nitpicker/next/`):
 
-If you can add that line, prefer the full `nitpicker` install skill instead — it gives the same source
-mapping plus prod-safety. The harness's sweet spot is **no target changes at all**.
+```ts
+// next.config.ts  — dev-only source stamp for the nitpicker element picker (owned build only)
+import type { NextConfig } from "next";
+import path from "node:path";
+
+const dev = process.env.NODE_ENV !== "production";
+const loader = path.resolve("./nitpicker/next/nitpicker-source-loader.cjs");
+
+const nextConfig: NextConfig = {
+  ...(dev && {
+    // Turbopack (`next dev` default in Next 15/16). Glob → loader; DON'T set `as`/`type` — the loader
+    // returns tsx/jsx unchanged, so let Turbopack keep the file's native pipeline (an `as: "*.tsx"`
+    // makes it re-append the extension → "Can't resolve ./foo.tsx.tsx").
+    turbopack: {
+      rules: {
+        "*.tsx": { loaders: [loader] },
+        "*.jsx": { loaders: [loader] },
+      },
+    },
+    // Fallback for `next dev --webpack`. (`next build` sets NODE_ENV=production, so the stamp is off there.)
+    webpack(config) {
+      config.module.rules.push({ test: /\.[jt]sx$/, exclude: /node_modules/, use: [loader] });
+      return config;
+    },
+  }),
+};
+
+export default nextConfig;
+```
+
+The loader is bundler-agnostic — the **same** `.cjs` runs under Turbopack `turbopack.rules` and webpack
+`module.rules`. It stamps `data-nitpicker-source="file:line:col"` onto host JSX only (never components,
+never `node_modules`), and any file it can't parse passes through unstamped rather than breaking the dev
+build. Confirmed under Next 16 / Turbopack; regression-tested in `tests/source-stamp.test.ts`.
+
+Prefer the full `nitpicker` install skill if you can — it gives the same source mapping plus prod-safety
+gates. The harness's sweet spot is still **no target changes at all**; this stamp is the one opt-in for
+teams who own the build and want `file:line` back.
 
 ## Verifying it works
 
