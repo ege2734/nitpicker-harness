@@ -80,6 +80,14 @@ export class Overlay implements NitpickerHandle {
   // reserve the pane's gutter, plus a transition so the reflow animates).
   private prevHtmlMarginRight = "";
   private prevHtmlTransition = "";
+  // Cached viewport width EXCLUDING a classic scrollbar's gutter (documentElement.clientWidth). appWidth()
+  // reads this instead of innerWidth so the frozen-region clone, drag clamp, dim bands, and pane crop all
+  // reproduce the live app's content box exactly — otherwise the clone is scrollbarWidth px too wide and
+  // the opaque frozen snapshot appears shifted vs the live page it replaces (Issue 1). Overlay scrollbars
+  // (0 width, e.g. macOS default) make it identical to innerWidth, so this is a no-op there. Cached +
+  // refreshed only at moments the geometry can change (mount, resize, drag/freeze entry) so the per-frame
+  // drag path never forces a layout read. Falls back to innerWidth when clientWidth is 0 (jsdom/pre-layout).
+  private viewportContentW = 0;
 
   // DOM handles
   private dock!: HTMLElement;
@@ -126,6 +134,7 @@ export class Overlay implements NitpickerHandle {
     this.scale = opts.captureScale ?? this.env.win.devicePixelRatio ?? 1;
     this.transport = new Transport(opts.session, opts.endpoint ?? "http://127.0.0.1:5178");
     this.paneShown = this.readPaneShown();
+    this.measureViewport();
 
     const docEl = this.env.doc.documentElement;
     this.prevHtmlMarginRight = docEl.style.marginRight;
@@ -312,6 +321,7 @@ export class Overlay implements NitpickerHandle {
     // Drop any prior frozen clone still on screen (double hotkey press) before building a fresh one.
     this.clearSnapshot();
     this.setMode("region"); // arm immediately so the mode reflects the keypress
+    this.measureViewport(); // lay the frozen clone out at the live content width (excludes the scrollbar)
     try {
       // Attaches the frozen clone to the light DOM at ~z just below the overlay; the drag bands/outline
       // (shadow DOM, higher z) render on top of it. Laid out at appWidth so its geometry — and the red-box
@@ -328,6 +338,7 @@ export class Overlay implements NitpickerHandle {
   private onDragStart = (e: MouseEvent): void => {
     if (this.mode !== "region") return;
     e.preventDefault();
+    this.measureViewport(); // refresh the content-width cache before the drag geometry uses it
     this.dragStart = { x: e.clientX, y: e.clientY };
     // Dock path: DO NOT rasterize here. The selection box is just an overlay rect drawn on the LIVE page,
     // so dragging is instant with no freeze. The screenshot is rasterized later, at Queue-commit time
@@ -365,8 +376,9 @@ export class Overlay implements NitpickerHandle {
     } else {
       // Dock path: open the queue card INSTANTLY over the live page (no freeze). The screenshot is
       // rasterized only if/when the user commits with Queue (enqueueRegion below), so a canceled drag
-      // captures nothing.
-      this.clearDrag();
+      // captures nothing. Leave the dim bands + red outline ON SCREEN as the persistent "selected region"
+      // visual (torn down by unfreeze() on Queue/Cancel/Esc) so the user can see what they framed while
+      // composing — only the drag *state* (dragStart) is cleared, already nulled above.
       this.openCard(
         rect,
         (text) => this.enqueueRegion(rect, this.captureRegionShot(rect), text),
@@ -456,9 +468,10 @@ export class Overlay implements NitpickerHandle {
     }
     // Hand the holder to the card-backdrop lifecycle: removed on card close (Cancel/Esc) unless its raster
     // is mid-flight, in which case the raster's `.finally` removes it. The frozen page stays visible (with
-    // its hover-only UI) behind the card while the user types.
+    // its hover-only UI) behind the card while the user types. Keep the dim bands + red outline on top of
+    // the frozen clone as the persistent selection visual (torn down by unfreeze()) — only clear the drag
+    // *state*, which onDragEnd already nulled, so the framed region stays visible while composing.
     this.frozenHolder = snapshot.holder;
-    this.clearDrag();
     this.openCard(
       rect,
       (text) => this.enqueueRegion(rect, this.captureFrozenShot(snapshot, rect), text),
@@ -644,6 +657,11 @@ export class Overlay implements NitpickerHandle {
   private unfreeze(): void {
     this.freeze.classList.remove("np-show", "np-over-pane");
     this.freeze.innerHTML = "";
+    // Tear down the persistent region selection visual (dim bands + red outline) that onDragEnd/captureFrozen
+    // now leave on screen while the card is open. This is the single teardown point for Queue (via done()),
+    // Cancel, backdrop-click, and Esc — so the framed region always clears exactly when the card closes.
+    // A no-op for the element card / view-edit modal (no drag active), which also route through unfreeze().
+    this.clearDrag();
     // Keep the visual dimming while a dock raster is still in flight — the functional lock (paneLocked)
     // outlives the card, so the pane must LOOK locked or its toggle silently no-ops.
     this.setPaneLocked(this.pendingDockRasters > 0);
@@ -923,10 +941,22 @@ export class Overlay implements NitpickerHandle {
     return this.paneShown && this.env.win.innerWidth > PANE_MIN_VIEWPORT ? PANE_W : 0;
   }
 
-  /** The app's rendered area width — the full viewport minus the pane's reserved gutter. Region capture
-   *  and the drag selection are both confined to this so a screenshot never includes the pane. */
+  /** The app's rendered area width — the viewport content box (minus any classic scrollbar) minus the
+   *  pane's reserved gutter. Region capture and the drag selection are both confined to this so a
+   *  screenshot never includes the pane, and the frozen clone lays out at exactly the live content width
+   *  (no shift on freeze — Issue 1). Reads the cached {@link viewportContentW}, falling back to innerWidth. */
   private appWidth(): number {
-    return this.env.win.innerWidth - this.reservedWidth();
+    return (this.viewportContentW || this.env.win.innerWidth) - this.reservedWidth();
+  }
+
+  /** Refresh the cached viewport content width from documentElement.clientWidth (viewport MINUS a classic
+   *  scrollbar's gutter; unaffected by the pane's <html> margin-right, which is a special case for the root
+   *  element). Called only when the geometry can change — mount, resize, drag/freeze entry — so appWidth()
+   *  and the hot per-frame drag path never force a synchronous layout. clientWidth is 0 in a non-layout env
+   *  (jsdom) → fall back to innerWidth, keeping behavior identical there (and under 0-width overlay scrollbars). */
+  private measureViewport(): void {
+    const client = this.env.doc.documentElement.clientWidth;
+    this.viewportContentW = client > 0 ? client : this.env.win.innerWidth;
   }
 
   private setPaneShown(shown: boolean): void {
@@ -964,6 +994,7 @@ export class Overlay implements NitpickerHandle {
     // Don't reflow the app while a card/modal is open or a dock raster is in flight — an appWidth change
     // would desync the pending screenshot. maybeReconcileLayout() catches up once the lock releases.
     if (this.paneLocked()) return;
+    this.measureViewport(); // viewport (and thus its scrollbar gutter) may have changed
     this.applyPaneLayout();
   };
 
