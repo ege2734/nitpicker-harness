@@ -33,7 +33,7 @@ export interface ElementDescriptor {
  *  blob + a thumbnail) and are stripped by `serializeItem` before sending. */
 export interface QueueItem {
   id: string;
-  kind: "region" | "element" | "message";
+  kind: "region" | "element" | "message" | "text-edit";
   text: string;
   pageUrl: string;
   route?: string;
@@ -48,6 +48,11 @@ export interface QueueItem {
     selectionRect: Rect;
   };
   element?: ElementDescriptor;
+  /** text-edit only: the element's visible text before and after an inline edit. `element` carries the
+   *  source/selector/component so the agent can locate and patch the string; `source` (owned-build opt-in)
+   *  is the most directly patchable, degrading to selector + text when absent. */
+  oldText?: string;
+  newText?: string;
   /** client-only: the composited PNG, uploaded as a binary blob on send (never base64 in JSON). */
   _blob?: Blob;
   /** client-only: a small data-URL thumbnail for the chat panel. */

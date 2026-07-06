@@ -49,6 +49,13 @@ it is **not** upstreamed — preserve it on every re-sync (do NOT blind-copy `re
   that both endpoints report as the driver's loop guard. Draining stays exclusive to `/poll`, so these
   never race away an item. Marked in-file; preserve on re-sync.
 
+- **`core/types.ts` + `server/store.ts` + `cli/poll.ts` — the `text-edit` QueueItem kind** (builder-shell
+  Phase 4). The shell's inline click-to-edit flow (`src/shell/entry.ts`) captures a visible-text change as a
+  `text-edit` mark carrying `element` (source/selector/component, same as element mode) plus top-level
+  `oldText`/`newText`. `core/types.ts` adds the kind + the two fields to `QueueItem`; the sidecar is
+  schema-light so `server/` only widens the `kind` union (items pass through opaquely); `cli/poll.ts` renders
+  the mark for the agent (source, `old → new`, component, selector). Additive and injected-mode-neutral (the
+  injected overlay never emits this kind). Preserve on re-sync (same rule as the deltas above).
 - **`core/env.ts` (new) + the `Env` seam through `core/overlay.ts` + `core/region.ts`** — the overlay
   engine was written against the ambient `document`/`window` globals. The builder shell (`src/shell`) needs
   the SAME engine to read a DIFFERENT document — the same-origin proxied `<iframe>`'s

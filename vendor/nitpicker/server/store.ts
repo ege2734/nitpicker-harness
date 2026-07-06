@@ -11,7 +11,10 @@ import { EventEmitter } from "node:events";
  *  `image.path`, which it resolves to a local file before enqueuing. */
 export interface FeedbackItem {
   id: string;
-  kind: "region" | "element" | "message";
+  // HARNESS-LOCAL DELTA: `text-edit` (builder-shell Phase 4) — an inline text change captured in the shell.
+  // The sidecar is schema-light (items pass through opaquely), so this is additive; the kind + oldText/newText
+  // are typed here only for completeness. See vendor/nitpicker/README.md "Local modifications".
+  kind: "region" | "element" | "message" | "text-edit";
   text: string;
   pageUrl?: string;
   route?: string;
@@ -26,6 +29,9 @@ export interface FeedbackItem {
     selectionRect?: { x: number; y: number; w: number; h: number };
   };
   element?: Record<string, unknown>;
+  /** text-edit only: visible text before/after the inline edit (see QueueItem in core/types.ts). */
+  oldText?: string;
+  newText?: string;
 }
 
 interface Session {

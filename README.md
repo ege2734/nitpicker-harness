@@ -145,6 +145,9 @@ which also brings prod-safety gates. The harness's sweet spot is still *no targe
 - ✅ Owned-build `file:line:col` provenance (Phase 3): a one-line `next.config` opt-in (the vendored
   dev-only source-stamp loader) makes the picker surface `source` in the chat item **and** the drained
   `poll` payload; apps without it degrade gracefully to component + selector + text + route.
+- ✅ Inline click-to-edit text (Phase 4): an "edit" mode makes the picked node `contenteditable` in the
+  iframe; on save the before/after text rides a source-keyed `text-edit` mark that `poll` prints as
+  `source` → `old → new` for the agent to patch. Without a source stamp it degrades to selector + text.
 
 **Deferred (follow-ups, not blockers):**
 
