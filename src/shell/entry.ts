@@ -501,6 +501,9 @@ class ShellChrome {
       // Never upload a region mark whose capture failed (no blob) — it would serialize as hasRedBox with
       // no screenshot. (A failed capture already removed itself, but guard belt-and-braces.)
       const uploadable = batch.filter((i) => !(i.kind === "region" && !i._blob));
+      // Everything dropped (e.g. the only mark's capture just failed) — skip the empty POST and leave the
+      // "Capture failed: …" status the failing capture set, rather than clobber it with "Sent 0 items".
+      if (uploadable.length === 0) return;
       await this.transport.sendBatch(uploadable);
       this.queue = this.queue.filter((i) => !uploadable.includes(i));
       this.setStatus(`Sent ${uploadable.length} item${uploadable.length === 1 ? "" : "s"} to the agent.`, "ok");
