@@ -21,6 +21,9 @@ interface FeedbackItem {
   pageUrl?: string;
   image?: { path?: string; url?: string; hasRedBox?: boolean };
   element?: Record<string, unknown>;
+  /** text-edit only (builder-shell Phase 4): the visible text before/after an inline edit. */
+  oldText?: string;
+  newText?: string;
 }
 
 interface PollResult {
@@ -64,7 +67,22 @@ function printBatch(result: PollResult): void {
         `    image: ${item.image.path}${item.image.hasRedBox ? "  (red box)" : ""}\n`,
       );
     }
-    if (item.element) process.stdout.write(`    element: ${JSON.stringify(item.element)}\n`);
+    if (item.kind === "text-edit") {
+      // The agent's job is to patch the string in source. Surface the build-stamped `file:line:col` first
+      // (owned-build opt-in — most directly greppable), then the old→new diff and the selector fallback.
+      const el = item.element ?? {};
+      const source = el.source as string | undefined;
+      const selector = el.selector as string | undefined;
+      const component = el.component as string | undefined;
+      if (source) process.stdout.write(`    source: ${source}\n`);
+      process.stdout.write(
+        `    edit: ${JSON.stringify(item.oldText ?? "")} → ${JSON.stringify(item.newText ?? "")}\n`,
+      );
+      if (component) process.stdout.write(`    component: ${component}\n`);
+      if (selector) process.stdout.write(`    selector: ${selector}\n`);
+    } else if (item.element) {
+      process.stdout.write(`    element: ${JSON.stringify(item.element)}\n`);
+    }
   });
   process.stdout.write(`\n--- raw JSON ---\n${JSON.stringify(result, null, 2)}\n`);
 }

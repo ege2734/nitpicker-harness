@@ -46,9 +46,9 @@ Then:
      **http://127.0.0.1:4000/__nitpicker-harness/shell** instead (the ready banner advertises both). The
      shell embeds the app in a same-origin iframe and keeps the chat + queue in a parent side-panel, so
      the queue **survives any in-iframe navigation** (SPA route change, reload, cross-origin excursion). A
-     mode toolbar drives the full interactive layer from the parent — drag a **Region** for a screenshot
-     or pick an **Element** for its component/selector, both read out of the iframe; it drains via the
-     same `poll`.
+     mode toolbar drives the full interactive layer from the parent — drag a **Region** for a screenshot,
+     pick an **Element** for its component/selector, or use **Edit** to click a text node and edit it
+     inline (Enter saves, Esc cancels), all read out of the iframe; it drains via the same `poll`.
 3. **Drain the feedback** whenever the driver tells you to (or manually):
 
    ```bash
@@ -118,6 +118,10 @@ Cheap manual signal if you ever want to check by hand: `npx nitpicker-harness pe
   testid/id/stable class), `testid`, `tag`, `role`, `text`, `rect`, plus `route`. `source`
   (`file:line:col`) is present **only** if the opt-in stamp is wired (below). Grep with
   `component`/`selector`/`text` + `route` when `source` is absent.
+- **text-edit** — an inline text edit from the builder-shell **Edit** mode. `poll` prints `source`
+  (`file:line:col`, only when the opt-in stamp is wired), then `edit: "old" → "new"`, then `component`
+  and `selector`. Patch the string in source: prefer `source` when present, else locate it by
+  `component`/`selector`/`text` + `route`. `item.element` carries the same descriptor as an element mark.
 - **message** — plain `text`, with `route`/`pageUrl` for context.
 
 The queue survives a killed/re-issued poll (cleared only on actual delivery), so feedback is never lost

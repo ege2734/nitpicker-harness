@@ -20,10 +20,13 @@ import { captureRegion } from "../../vendor/nitpicker/core/region";
 import { baseDescriptor } from "../../vendor/nitpicker/core/elements";
 import type { Env } from "../../vendor/nitpicker/core/env";
 import { resolveReactElement } from "../../vendor/nitpicker/react/react-source";
-import type { QueueItem, Rect, Viewport } from "../../vendor/nitpicker/core/types";
+import type { ElementDescriptor, QueueItem, Rect, Viewport } from "../../vendor/nitpicker/core/types";
 import { dragBox, elementRectInParent, parentPointToIframe } from "./geometry";
 
-type Mode = "cursor" | "region" | "element";
+// Phase 4 adds "edit": a text element the picker lands on is made contenteditable IN THE IFRAME, and the
+// before/after text is captured into a source-keyed `text-edit` mark the agent can patch. It reuses the
+// element-pick hover/outline surface; only the click terminal differs (begin an inline edit vs. enqueue).
+type Mode = "cursor" | "region" | "element" | "edit";
 
 function readConfig(): { session: string; endpoint: string } {
   const fallback = { session: "nitpicker", endpoint: "http://127.0.0.1:5178" };
@@ -112,6 +115,14 @@ class ShellChrome {
   private dragStart: { x: number; y: number } | null = null;
   private dragFrame: { left: number; top: number } | null = null;
 
+  // inline text-edit state (edit mode). While `editingEl` is set the picker's hover is frozen so the
+  // outline stays pinned on the node being edited. `editOldHtml` restores the DOM verbatim on cancel.
+  private editingEl: HTMLElement | null = null;
+  private editDescriptor: ElementDescriptor | null = null;
+  private editOldText = "";
+  private editOldHtml = "";
+  private editCancelled = false;
+
   constructor(private readonly session: string, endpoint: string) {
     this.transport = new Transport(session, endpoint);
     this.buildInteractionLayer();
@@ -129,7 +140,7 @@ class ShellChrome {
         this.queueMessage();
       }
     });
-    for (const mode of ["cursor", "region", "element"] as const) {
+    for (const mode of ["cursor", "region", "element", "edit"] as const) {
       const btn = document.getElementById(`nh-mode-${mode}`) as HTMLButtonElement | null;
       if (btn) {
         this.modeBtns.set(mode, btn);
@@ -195,6 +206,10 @@ class ShellChrome {
   // ---- mode state machine ----
   private setMode(mode: Mode): void {
     if (mode === this.mode) return;
+    // Finalize (commit) any in-flight inline edit before switching away — a blur usually beats us here
+    // (clicking a mode button moves focus off the contenteditable node), but guard belt-and-braces so the
+    // node is never left editable. commitEdit() clears editingEl first, so this never recurses.
+    if (this.editingEl) this.commitEdit();
     // tear down the mode we're leaving
     this.disablePicker();
     this.clearDrag();
@@ -205,7 +220,8 @@ class ShellChrome {
     this.mode = mode;
     for (const [m, btn] of this.modeBtns) btn.classList.toggle("nh-active", m === mode);
 
-    if (mode === "element") this.enablePicker();
+    // Element and edit modes share the pick surface (hover-outline + click); the click terminal differs.
+    if (mode === "element" || mode === "edit") this.enablePicker();
     else if (mode === "region") {
       this.fitDragLayer();
       this.dragLayer.style.display = "block";
@@ -215,9 +231,12 @@ class ShellChrome {
 
   private onFrameLoad(): void {
     // The old document is gone — drop any highlight and re-attach listeners to the new one if still picking.
+    // A navigation also abandons any in-flight edit (its node no longer exists), so forget it silently.
     this.hideHighlight();
     this.hoverTarget = null;
-    if (this.mode === "element") {
+    this.editingEl = null;
+    this.editDescriptor = null;
+    if (this.mode === "element" || this.mode === "edit") {
       this.disablePicker();
       this.enablePicker();
     } else if (this.mode === "region") {
@@ -272,8 +291,13 @@ class ShellChrome {
     this.hoverTarget = null;
   }
 
+  private isPicking(): boolean {
+    return this.mode === "element" || this.mode === "edit";
+  }
+
   private onPickOver = (e: Event): void => {
-    if (this.mode !== "element") return;
+    // While an inline edit is active the outline stays pinned on the editing node — ignore hover.
+    if (!this.isPicking() || this.editingEl) return;
     const t = e.target as Element | null;
     if (!t || t.nodeType !== 1) {
       this.hideHighlight();
@@ -284,19 +308,23 @@ class ShellChrome {
   };
 
   private onPickOut = (e: Event): void => {
-    if (this.mode !== "element") return;
+    if (!this.isPicking() || this.editingEl) return;
     // Left the iframe document entirely → drop the outline.
     if (!(e as MouseEvent).relatedTarget) this.hideHighlight();
   };
 
   private onPickClick = (e: Event): void => {
-    if (this.mode !== "element") return;
+    if (!this.isPicking()) return;
+    // A click while editing lands on the contenteditable node (caret placement) or elsewhere (which blurs
+    // → commit). Either way, don't re-pick — let the native behavior / blur handler run.
+    if (this.editingEl) return;
     const t = e.target as Element | null;
     if (!t || t.nodeType !== 1) return;
     // Swallow the click so picking a link/button doesn't drive the app.
     e.preventDefault();
     e.stopPropagation();
-    this.enqueueElement(t);
+    if (this.mode === "edit") this.beginEdit(t);
+    else this.enqueueElement(t);
   };
 
   private onFrameScroll = (): void => this.repositionHighlight();
@@ -425,6 +453,105 @@ class ShellChrome {
     this.setStatus("");
     this.render();
     this.setMode("cursor");
+  }
+
+  // ---- inline text edit (edit mode) ----
+  /** Turn the picked iframe node into a contenteditable field and start an inline edit. The node is a
+   *  same-origin element (we hold a live reference across the iframe boundary), so setting `contentEditable`
+   *  and calling `focus()` on it drives the iframe's own document directly — the change is visible in the
+   *  preview immediately. We snapshot the descriptor (source/selector/component) + old text NOW, before the
+   *  edit, so the mark carries the pre-edit state even though the DOM keeps mutating as the user types. */
+  private beginEdit(target: Element): void {
+    const el = target as HTMLElement;
+    this.editDescriptor = { ...baseDescriptor(el), ...resolveReactElement(el) };
+    this.editOldText = normText(el);
+    this.editOldHtml = el.innerHTML;
+    this.editCancelled = false;
+    this.editingEl = el;
+    // Pin the outline on the node being edited (hover is frozen while editingEl is set).
+    this.hoverTarget = el;
+    this.showHighlight(el);
+    this.setStatus("Editing text — Enter to save, Esc to cancel.");
+    el.contentEditable = "true";
+    el.setAttribute("data-nh-editing", "1");
+    el.focus();
+    selectAllText(el, this.pickerWin);
+    // Capture phase so Enter/Escape are handled before the app's own key handlers.
+    el.addEventListener("keydown", this.onEditKey, true);
+    el.addEventListener("blur", this.onEditBlur, true);
+  }
+
+  private onEditKey = (e: KeyboardEvent): void => {
+    if (e.key === "Enter") {
+      // Truly single-line: never insert a newline. Plain Enter commits (blur); Shift+Enter is swallowed too.
+      e.preventDefault();
+      if (!e.shiftKey) (e.currentTarget as HTMLElement).blur();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      this.editCancelled = true;
+      (e.currentTarget as HTMLElement).blur();
+    }
+  };
+
+  private onEditBlur = (): void => {
+    this.commitEdit();
+    this.setMode("cursor");
+  };
+
+  /** Tear down the active edit: detach listeners, drop contenteditable, and — unless cancelled or the text
+   *  is unchanged — enqueue a `text-edit` mark. Clears `editingEl` FIRST so a re-entrant setMode()/blur is a
+   *  no-op. Does NOT change mode (the caller owns that), so it can be reused from setMode's guard. */
+  private commitEdit(): void {
+    const el = this.editingEl;
+    if (!el) return;
+    this.editingEl = null;
+    el.removeEventListener("keydown", this.onEditKey, true);
+    el.removeEventListener("blur", this.onEditBlur, true);
+    el.removeAttribute("contenteditable");
+    el.removeAttribute("data-nh-editing");
+    this.hideHighlight();
+
+    const descriptor = this.editDescriptor;
+    const oldText = this.editOldText;
+    const cancelled = this.editCancelled;
+    this.editDescriptor = null;
+
+    if (cancelled) {
+      // Discard the visual change too — restore the node's original markup verbatim.
+      el.innerHTML = this.editOldHtml;
+      this.setStatus("");
+      return;
+    }
+    const newText = normText(el);
+    if (newText === oldText) {
+      // Unchanged — restore original markup so a no-op edit never leaves the preview normalized.
+      el.innerHTML = this.editOldHtml;
+      this.setStatus("");
+      return;
+    }
+    if (!descriptor) {
+      this.setStatus("");
+      return;
+    }
+    this.enqueueTextEdit(descriptor, oldText, newText);
+  }
+
+  private enqueueTextEdit(descriptor: ElementDescriptor, oldText: string, newText: string): void {
+    const { href, route } = iframeLocation(this.frame);
+    this.queue.push({
+      id: uuid(),
+      kind: "text-edit",
+      text: this.takeNote(),
+      pageUrl: href,
+      route,
+      viewport: frameViewport(this.frame),
+      timestamp: new Date().toISOString(),
+      element: descriptor,
+      oldText,
+      newText,
+    });
+    this.setStatus(descriptor.source ? `Text edit queued · ${descriptor.source}` : "Text edit queued", "ok");
+    this.render();
   }
 
   private enqueueRegion(rect: Rect, capture: Promise<{ blob: Blob; thumb: string }>): void {
@@ -558,6 +685,24 @@ class ShellChrome {
           src.textContent = el.source;
           row.appendChild(src);
         }
+      } else if (item.kind === "text-edit") {
+        // The mark is a source-keyed string change. Lead with the "✎" chip + the greppable source (same
+        // owned-build opt-in as element mode), then show the old→new diff so the change reads at a glance.
+        const chip = document.createElement("span");
+        chip.className = "nh-item-route";
+        chip.textContent = "✎ edit";
+        row.appendChild(chip);
+        const src = item.element?.source;
+        if (src) {
+          const srcChip = document.createElement("span");
+          srcChip.className = "nh-item-route nh-item-source";
+          srcChip.textContent = src;
+          row.appendChild(srcChip);
+        }
+        const diff = document.createElement("span");
+        diff.className = "nh-item-edit";
+        diff.textContent = `“${item.oldText ?? ""}” → “${item.newText ?? ""}”`;
+        row.appendChild(diff);
       }
 
       row.appendChild(document.createTextNode(item.text || "(no note)"));
@@ -576,6 +721,33 @@ class ShellChrome {
       row.appendChild(del);
       this.queueEl.appendChild(row);
     }
+  }
+}
+
+/** Normalized visible text of a node — collapse runs of whitespace and trim, so a text edit that changes
+ *  only incidental whitespace (e.g. contenteditable inserting a stray newline) doesn't register as a diff.
+ *  Reads `textContent` (deterministic across the contenteditable lifecycle) rather than layout-dependent
+ *  `innerText`, matching how `oldText`/`newText` are compared. */
+function normText(el: Element): string {
+  return (el.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
+/** Select all of a contenteditable node's contents in the iframe so the user's first keystroke replaces
+ *  the text (the common case for a quick label tweak). Uses the IFRAME window's selection, not the parent's,
+ *  since the node and its caret live in the iframe document. Best-effort — a failure just leaves the caret
+ *  wherever `focus()` put it. */
+function selectAllText(el: HTMLElement, win: Window | null): void {
+  if (!win) return;
+  try {
+    const range = win.document.createRange();
+    range.selectNodeContents(el);
+    const sel = win.getSelection();
+    if (sel) {
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  } catch {
+    /* selection API unavailable / node detached — leave the caret as focus() placed it */
   }
 }
 

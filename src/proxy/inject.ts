@@ -81,6 +81,7 @@ export function shellPage(cfg: InjectConfig): string {
   .nh-item { position: relative; padding: 8px 28px 8px 10px; border: 1px solid #262b33; border-radius: 8px; background: #1a1e24; white-space: pre-wrap; word-break: break-word; }
   .nh-item .nh-item-route { display: block; margin-top: 4px; font-size: 10px; color: #6b727c; }
   .nh-item .nh-item-source { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #8a93a0; }
+  .nh-item .nh-item-edit { display: block; margin-top: 4px; font-size: 11px; color: #c7cdd6; }
   .nh-item .nh-del { position: absolute; top: 4px; right: 6px; border: 0; background: transparent; color: #6b727c; cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; }
   .nh-item .nh-del:hover { color: #e06c6c; }
   .nh-compose { border-top: 1px solid #23272e; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
@@ -109,6 +110,7 @@ export function shellPage(cfg: InjectConfig): string {
         <button class="nh-mode nh-active" id="nh-mode-cursor" type="button" data-mode="cursor" title="Cursor — passive (Esc)" aria-label="Cursor mode">▧</button>
         <button class="nh-mode" id="nh-mode-region" type="button" data-mode="region" title="Region — drag over the app to screenshot" aria-label="Region mode">⬚</button>
         <button class="nh-mode" id="nh-mode-element" type="button" data-mode="element" title="Element — hover to outline, click to pick a component" aria-label="Element mode">◎</button>
+        <button class="nh-mode" id="nh-mode-edit" type="button" data-mode="edit" title="Edit text — click a text element to edit it inline (Enter to save, Esc to cancel)" aria-label="Edit text mode">✎</button>
       </span>
       <span class="nh-count" id="nh-count">0</span>
       <span class="nh-sess">${sessionText}</span>

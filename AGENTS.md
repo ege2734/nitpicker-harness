@@ -39,7 +39,17 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   `element`, so no transport change was needed — Phase 3 is UI surfacing + docs + confirming the stamp
   under Next 16). Apps without the build stamp degrade to `component + selector + text + route` with no
   error. The one-line `next.config` wiring is documented in `SKILL.md` / `README.md`; the build-time
-  stamp is regression-tested in `tests/source-stamp.test.ts`.
+  stamp is regression-tested in `tests/source-stamp.test.ts`. **Phase 4 (landed — the finale)** added
+  **inline click-to-edit text**: a 4th "edit" mode reuses the Phase-2 pick surface, but the click terminal
+  makes the picked iframe node `contenteditable` (the parent sets it on the same-origin node), and on
+  blur/Enter captures `{ oldText, newText }` + the Phase-3 `element` descriptor into a new `"text-edit"`
+  `QueueItem.kind`. Enter commits, Escape restores the node's original `innerHTML` and discards. The mark
+  degrades gracefully without a source stamp (selector + text only). `poll` renders it as `source` →
+  `old → new` → component → selector. The `text-edit` kind is a harness-local delta across
+  `core/types.ts` + `server/store.ts` (schema-light passthrough) + `cli/poll.ts` (see
+  `vendor/nitpicker/README.md`); round-trip is unit-tested in `vendor/nitpicker/tests/sidecar.test.ts`.
+  v1 limitation: the source stamp is per host element, so an element with mixed children maps the edit to
+  the element, not the exact text node.
 - `src/cli.ts` + `bin/nitpicker-harness` — CLI; spawns the vendored sidecar and starts the proxy. Also
   exposes `stop-hook` (the turn-end driver) and `pending` (cheap queued-count signal).
 - `src/hook.ts` — the **feedback driver**: a Claude-Code Stop-hook that parks on the sidecar's `/wait`

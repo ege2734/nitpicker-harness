@@ -49,4 +49,27 @@ describe("SessionStore", () => {
     expect(s.size("a")).toBe(1);
     expect(s.drain("a").map((i) => i.id)).toEqual(["1"]);
   });
+
+  it("round-trips a text-edit mark's oldText/newText + element source (Phase 4, schema-light passthrough)", () => {
+    const s = new SessionStore();
+    const edit: FeedbackItem = {
+      id: "e1",
+      kind: "text-edit",
+      text: "",
+      route: "/",
+      element: { source: "app/pricing-card.tsx:9:7", selector: "h2", component: "PricingCard" },
+      oldText: "Pro plan",
+      newText: "Pro plan — EDITED FROM PARENT",
+    };
+    s.enqueue("a", [edit]);
+    const [drained] = s.drain("a");
+    expect(drained.kind).toBe("text-edit");
+    expect(drained.oldText).toBe("Pro plan");
+    expect(drained.newText).toBe("Pro plan — EDITED FROM PARENT");
+    expect(drained.element).toEqual({
+      source: "app/pricing-card.tsx:9:7",
+      selector: "h2",
+      component: "PricingCard",
+    });
+  });
 });
