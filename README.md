@@ -56,8 +56,9 @@ The harness fronts your app in two ways, advertised side by side in the ready ba
   harness origin that embeds your app in a same-origin `<iframe src="/">` and hosts the chat + queue in
   the **parent** window. Because the chrome lives outside the app frame, the queue **survives any
   in-iframe navigation** — SPA route change, hard reload, even a cross-origin excursion — with zero extra
-  code. Phase 1 is chat + `Send to agent` only (no region/element yet; those lift into the parent in later
-  phases). Both modes POST to the same sidecar, so `poll` drains either.
+  code. A mode toolbar drives the full interactive layer from the parent: **region** drag → screenshot
+  and **element** pick → component/selector, both read out of the same-origin iframe and rendered over it.
+  Both modes POST to the same sidecar, so `poll` drains either.
 
 ### Keep the agent driven
 
@@ -103,7 +104,9 @@ nitpicker-harness shutdown [--endpoint <url>]
   URL's query string, so no inline script is needed).
 - **`src/shell/`** — the builder-shell mode: `inject.ts:shellPage` renders the parent page (the app in a
   same-origin iframe + the chat/queue chrome), and `entry.ts` (bundled by esbuild, mirroring the overlay)
-  is the parent-window chrome that reuses the vendored `core/transport.ts` to POST the queue to the sidecar.
+  is the parent-window chrome. It reuses the vendored `core/transport.ts` to POST the queue and drives the
+  region/element engine primitives against the iframe via the reused `Env` seam (`geometry.ts` holds the
+  single-offset coordinate math that keeps the highlight/red box over the frame).
 - **`vendor/nitpicker/`** — nitpicker's `core/` (overlay, region, elements, redbox, transport), the
   React `resolveElement` glue, the `server/` sidecar, and the `cli/` poll/verify — copied in so this
   repo is self-contained (it becomes nitpicker's canonical home when nitpicker is archived).
@@ -132,8 +135,9 @@ which also brings prod-safety gates. The harness's sweet spot is *no target chan
   returns `101`) — editing the source hot-reloads the proxied page, overlay intact.
 - ✅ `X-Frame-Options` stripped, CSP `frame-ancestors` dropped + `script-src`/`connect-src`/`style-src` relaxed.
 - ✅ Builder-shell mode: parent-hosted chat + queue over a same-origin iframe; the queue survives SPA nav,
-  hard reload, and a cross-origin excursion, and its batch drains via `poll` (chat/send-to-sidecar only in
-  Phase 1 — region/element lift into the parent in later phases).
+  hard reload, and a cross-origin excursion, and its batch drains via `poll`. The interactive layer runs
+  from the parent too — region drag → screenshot and element pick → component/selector read out of the
+  iframe and rendered over it (Phase 2).
 
 **Deferred (follow-ups, not blockers):**
 
