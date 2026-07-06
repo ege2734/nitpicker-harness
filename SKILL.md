@@ -42,6 +42,12 @@ Then:
 2. **Tell the human**: "Open **http://127.0.0.1:4000** and mark up the app with the bottom-center dock —
    drag a **Region** for a screenshot, click **Element** to pick a component, or type a message. Hit
    **Send to agent** when done." (The app renders exactly as at :3000, plus the dock.)
+   - *Alternative — builder-shell mode:* point the human at
+     **http://127.0.0.1:4000/__nitpicker-harness/shell** instead (the ready banner advertises both). The
+     shell embeds the app in a same-origin iframe and keeps the chat + queue in a parent side-panel, so
+     the queue **survives any in-iframe navigation** (SPA route change, reload, cross-origin excursion).
+     Phase 1 supports chat + **Send to agent** only (no region/element yet); it drains via the same
+     `poll`.
 3. **Drain the feedback** whenever the driver tells you to (or manually):
 
    ```bash
