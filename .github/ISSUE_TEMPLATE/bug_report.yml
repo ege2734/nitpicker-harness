@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a problem with nitpicker-harness
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Please do **not** file security issues here — see
+        [SECURITY.md](../blob/main/SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Include the exact `nitpicker-harness` command and the target app/framework.
+      placeholder: |
+        1. Run `npm run start -- --target http://localhost:3000`
+        2. Open http://127.0.0.1:4000
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: Target framework & version
+      placeholder: "Next.js 16 / Turbopack, React 19"
+    validations:
+      required: false
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Node version (`node -v`), and nitpicker-harness version.
+    validations:
+      required: false

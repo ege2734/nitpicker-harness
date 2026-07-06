@@ -2,7 +2,7 @@
 //
 // The problem: `poll`/`poll --watch` only delivers while the agent is actively running it. The instant a
 // turn ends and the agent goes idle, newly-queued marks sit in the sidecar and nothing re-invokes the
-// agent. Firstmate solves the analogous problem for its crew with a blocking watcher plus a turn-end
+// agent. Agent-orchestration systems solve the analogous problem with a blocking watcher plus a turn-end
 // hook that re-invokes the agent on an OS-level event (zero tokens while idle). This is that pattern,
 // adapted to a Claude-Code-style Stop hook:
 //

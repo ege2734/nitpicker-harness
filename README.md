@@ -1,5 +1,8 @@
 # nitpicker-harness
 
+[![CI](https://github.com/ege2734/nitpicker-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/ege2734/nitpicker-harness/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 **Point it at a running web app and get the full feedback overlay — with zero overlay code in the
 target's repo.**
 
