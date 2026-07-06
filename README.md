@@ -120,7 +120,7 @@ Exact `file:line:col` is an **owned-build-only opt-in**: wire the vendored dev-o
 (`vendor/nitpicker/next/`) into the target's `next.config` — one config block, no source edits. Once
 wired, the picker prefers `source` and it rides both the builder-shell chat item and the drained `poll`
 payload (e.g. `source: "app/pricing-card.tsx:9:5"`). The exact one-liner (Turbopack `turbopack.rules` +
-webpack fallback, both gated on `NODE_ENV`) is in [SKILL.md](./SKILL.md#opt-in-exact-fileline-col-source-owned-build-only).
+webpack fallback, both gated on `NODE_ENV`) is in [SKILL.md](./SKILL.md#opt-in-exact-filelinecol-source-owned-build-only).
 If you can add it, prefer the full [nitpicker install skill](https://github.com/ege2734/nitpicker),
 which also brings prod-safety gates. The harness's sweet spot is still *no target changes at all*.
 
