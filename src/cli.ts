@@ -107,11 +107,14 @@ async function serve(args: string[]): Promise<void> {
     `\n  nitpicker-harness ready\n` +
       `  ┌─────────────────────────────────────────────\n` +
       `  │ open:     ${harness.url}\n` +
+      `  │ shell:    ${harness.url}/__nitpicker-harness/shell\n` +
       `  │ target:   ${target}\n` +
       `  │ sidecar:  ${endpoint}${runSidecar ? "" : "  (external — --no-sidecar)"}\n` +
       `  │ session:  ${session}\n` +
       `  └─────────────────────────────────────────────\n` +
-      `  Open the URL above, mark up with the bottom-center dock, then in your agent run:\n` +
+      `  • Feedback-proxy mode: open the app URL and mark up with the bottom-center dock.\n` +
+      `  • Builder-shell mode:  open the shell URL — persistent chat + queue in a parent frame.\n` +
+      `  Then in your agent run:\n` +
       `      nitpicker-harness poll --session ${session}\n\n`,
   );
 
