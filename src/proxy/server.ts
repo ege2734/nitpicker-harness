@@ -233,6 +233,10 @@ export function startHarness(opts: HarnessOptions): Promise<Harness> {
         headerLines.push(`${proxyRes.rawHeaders[i]}: ${proxyRes.rawHeaders[i + 1]}`);
       }
       clientSocket.write(`${statusLine}\r\n${headerLines.join("\r\n")}\r\n\r\n`);
+      // pipe() attaches no error handler to the source; an upstream body error/abort mid-stream would
+      // otherwise emit an unhandled 'error' on proxyRes and crash the harness. Tear the tunnel down instead.
+      proxyRes.on("error", () => clientSocket.destroy());
+      proxyRes.on("aborted", () => clientSocket.destroy());
       proxyRes.pipe(clientSocket);
     });
 
