@@ -4,17 +4,19 @@
 //   POST /blob        raw binary screenshot upload → { id, path, url }   (keeps images out of JSON)
 //   POST /feedback    enqueue one item or a batch { session, items:[…] }
 //   GET  /poll        agent long-poll: DRAINS the queue, heartbeats ~15s, indefinite by default
-//   GET  /pending     cheap, synchronous signal: { pending: <queued count> } — never drains
-//   GET  /wait        agent-driver long-poll: resolves { status:"pending", pending } the instant the
-//                     queue is non-empty; NEVER drains. Backs the Stop-hook waker (see src/hook.ts).
+//   GET  /pending     cheap, synchronous signal: { pending: <queued count>, drains: <gen> } — no drain
+//   GET  /wait        agent-driver long-poll: resolves { status:"pending", pending, drains } the instant
+//                     the queue is non-empty; NEVER drains. Backs the Stop-hook waker (see src/hook.ts).
 //   GET  /blob/:id    serve a stored blob (fallback to the file path the item already carries)
 //   GET  /health      liveness
 //   POST /shutdown    stop the process
 //
 // HARNESS-LOCAL DELTA: /pending and /wait are additions the harness needs to *drive an idle agent*
 // (a Stop-hook parks on /wait with zero token cost and wakes the agent the instant a mark lands). They
-// are non-draining by design, so the exactly-once drain guarantee still lives solely on /poll. When
-// re-syncing vendor/nitpicker/, preserve these two handlers.
+// are non-draining by design, so the exactly-once drain guarantee still lives solely on /poll. Both
+// carry the session's `drains` generation (store.drainCount) so the driver can tell a genuinely-new
+// batch (drains advanced) from one the agent ignored (drains unchanged) — that is the hook's loop
+// guard. When re-syncing vendor/nitpicker/, preserve these two handlers and the drains field.
 //
 // Session identity is a caller-supplied string (project/session id), never a file path. Zero
 // third-party deps: node:http only, so nothing here can ever leak into the app or prod.
@@ -158,7 +160,8 @@ function handleWait(req: IncomingMessage, res: ServerResponse, url: URL): void {
 
   // Fast path: already pending → answer immediately.
   const pending = store.size(session);
-  if (pending > 0) return json(res, 200, { status: "pending", pending });
+  if (pending > 0)
+    return json(res, 200, { status: "pending", pending, drains: store.drainCount(session) });
 
   // Park. Same heartbeat shape as /poll so the client's JSON.parse ignores keepalive whitespace.
   cors(res);
@@ -180,11 +183,17 @@ function handleWait(req: IncomingMessage, res: ServerResponse, url: URL): void {
   const unsubscribe = store.onFeedback(session, () => {
     if (res.writableEnded || req.destroyed) return;
     const n = store.size(session);
-    if (n > 0) finish({ status: "pending", pending: n }); // peek only — never drains
+    // peek only — never drains
+    if (n > 0) finish({ status: "pending", pending: n, drains: store.drainCount(session) });
   });
 
   const timer =
-    timeoutMs > 0 ? setTimeout(() => finish({ status: "timeout", pending: 0 }), timeoutMs) : null;
+    timeoutMs > 0
+      ? setTimeout(
+          () => finish({ status: "timeout", pending: 0, drains: store.drainCount(session) }),
+          timeoutMs,
+        )
+      : null;
 
   req.on("close", () => {
     if (done) return;
@@ -224,7 +233,7 @@ const server = createServer((req, res) => {
       if (method === "GET" && url.pathname === "/pending") {
         const session = url.searchParams.get("session");
         if (!session) return json(res, 400, { error: "missing session" });
-        return json(res, 200, { pending: store.size(session) });
+        return json(res, 200, { pending: store.size(session), drains: store.drainCount(session) });
       }
       if (method === "GET" && url.pathname === "/wait") return handleWait(req, res, url);
       if (method === "GET" && url.pathname.startsWith("/blob/")) {

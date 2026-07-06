@@ -43,10 +43,11 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   element-pick returns no `component` on React 19. This is a **harness-local delta upstream lacks** —
   when re-syncing `vendor/nitpicker/`, do NOT blind-copy `react-source.ts`/`react-source.test.ts`;
   preserve this patch (the rest of both files tracks upstream verbatim).
-- **`vendor/nitpicker/server/index.ts` carries a harness-local delta:** the `GET /pending` (cheap
-  count) and `GET /wait` (non-draining long-poll) endpoints the feedback driver needs. They are marked
-  in-file; preserve them on re-sync (same rule as the `react-source.ts` patch). Draining stays exclusive
-  to `/poll`, so these can never race away an item.
+- **`vendor/nitpicker/server/index.ts` + `store.ts` carry a harness-local delta:** the `GET /pending`
+  (cheap count) and `GET /wait` (non-draining long-poll) endpoints the feedback driver needs, plus the
+  per-session `drains` generation counter in `store.ts` (`drainCount`, bumped only on a real delivery)
+  that both endpoints report. They are marked in-file; preserve them on re-sync (same rule as the
+  `react-source.ts` patch). Draining stays exclusive to `/poll`, so these can never race away an item.
 - **Overlay bundle is cached in-process** (`build.ts`). After editing the overlay or vendored core,
   **restart the harness** — a reload alone serves the stale cached bundle.
 - **Sidecar port conflicts:** default 5178 is shared with any running nitpicker install. Use
@@ -66,8 +67,14 @@ turn-end trigger" shape:
 - `GET /wait` is the OS-level event source: a non-draining long-poll that resolves the instant the queue
   is non-empty. The Stop-hook (`src/hook.ts`, `stop-hook` subcommand) parks on it at **zero token cost**.
 - When a mark lands, the hook emits `{"decision":"block","reason":…}`; the agent's harness re-invokes the
-  agent, which drains via `poll`. The hook is loop-safe (honours `stop_hook_active`) and **fails open**
-  (never wedges a stop if the sidecar is down). Documented as the default install in `SKILL.md`.
+  agent, which drains via `poll`. The hook **fails open** (never wedges a stop if the sidecar is down).
+  Documented as the default install in `SKILL.md`.
+- **Loop-safety is the drain-generation counter, not `stop_hook_active`.** The store bumps a per-session
+  `drains` count only on a real delivery; `/pending` and `/wait` both report it. The hook persists the
+  generation it last drove at (file-backed under `os.tmpdir()`, keyed by endpoint+session) and re-drives
+  iff a drain has happened since (`drains` advanced) — so a batch that lands *after* the agent drained
+  mid-turn still gets driven, while a queue the agent simply ignored (generation unchanged) does not spin.
+  This closes the mid-turn stranding gap a bare `pending > 0` guard left open.
 - Install is a `Stop` hook in the target harness's `.claude/settings.json` with a large `timeout` (the
   wall-clock ceiling the hook stays parked; Claude-Code hooks are hard-killed at `timeout`, no heartbeat
   extension). On timeout the agent idles and the durable queue + next turn re-arm cover the gap.

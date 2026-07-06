@@ -30,6 +30,9 @@ export interface FeedbackItem {
 
 interface Session {
   queue: FeedbackItem[];
+  /** Monotonic count of *actual* deliveries — bumped only when drain() returns >0 items. Used by the
+   *  harness feedback driver to tell "agent drained since we drove" from "agent ignored the drive." */
+  drains: number;
 }
 
 /**
@@ -49,7 +52,7 @@ export class SessionStore {
   private session(id: string): Session {
     let s = this.sessions.get(id);
     if (!s) {
-      s = { queue: [] };
+      s = { queue: [], drains: 0 };
       this.sessions.set(id, s);
     }
     return s;
@@ -67,6 +70,11 @@ export class SessionStore {
     return this.sessions.get(id)?.queue.length ?? 0;
   }
 
+  /** Monotonic count of actual deliveries for a session (0 if unknown). Bumped only by a real drain. */
+  drainCount(id: string): number {
+    return this.sessions.get(id)?.drains ?? 0;
+  }
+
   /**
    * Read and remove every queued item for a session. Returns `[]` when empty. This is the single point
    * that clears the queue — call it only when you are about to deliver the result, so that a poll which
@@ -77,6 +85,7 @@ export class SessionStore {
     if (!s || s.queue.length === 0) return [];
     const items = s.queue;
     s.queue = [];
+    s.drains++; // a real delivery just happened — advance the generation
     return items;
   }
 

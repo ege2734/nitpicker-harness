@@ -5,15 +5,21 @@
 //   1. The sidecar's driver endpoints — a real sidecar process is booted on an ephemeral port and driven
 //      over HTTP. The load-bearing guarantee: a mark queued while NO poll is connected is not lost — it
 //      is reported by /pending, wakes /wait, and is delivered to the next /poll. /wait must never drain.
-//   2. The Stop-hook decision core (decideStopHook) — pure logic with an injectable transport, covering
-//      fail-open, the stop_hook_active loop guard, and the re-arm path.
+//   2. The Stop-hook decision core (decideStopHook) — pure logic with an injectable transport + state,
+//      covering fail-open, the drain-generation loop guard, and the mid-turn re-drive path.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { decideStopHook, buildReason, httpTransport, type HookTransport } from "../src/hook";
+import {
+  decideStopHook,
+  buildReason,
+  httpTransport,
+  memoryHookState,
+  type HookTransport,
+} from "../src/hook";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -126,45 +132,112 @@ describe("sidecar driver endpoints (durable delivery with no poll connected)", (
 });
 
 describe("Stop-hook decision core", () => {
-  const fake = (pending: number | null, waitResult = pending ?? 0): HookTransport => ({
-    pending: async () => pending,
+  // Fake transport keyed on a { pending, drains } shape. `info` returns null to model an unreachable
+  // sidecar; `wait` resolves the park's outcome.
+  const fake = (
+    info: { pending: number; drains: number } | null,
+    waitResult: { pending: number; drains: number } = info ?? { pending: 0, drains: 0 },
+  ): HookTransport => ({
+    info: async () => info,
     wait: async () => waitResult,
   });
-  const input = { session: SESSION, endpoint: base, timeoutMs: 0, stopHookActive: false };
+  const input = { session: SESSION, endpoint: base, timeoutMs: 0 };
 
   it("blocks the stop (drives the agent) when feedback is waiting", async () => {
-    const d = await decideStopHook(input, fake(2));
+    const d = await decideStopHook(input, fake({ pending: 2, drains: 0 }), memoryHookState());
     expect(d.block).toBe(true);
     expect(d.reason).toContain("poll --session drive-test");
   });
 
   it("does not block when nothing is pending and the wait times out", async () => {
-    const d = await decideStopHook(input, fake(0, 0));
+    const d = await decideStopHook(
+      input,
+      fake({ pending: 0, drains: 0 }, { pending: 0, drains: 0 }),
+      memoryHookState(),
+    );
     expect(d.block).toBe(false);
   });
 
   it("fails open: never blocks the stop when the sidecar is unreachable", async () => {
-    const d = await decideStopHook(input, fake(null));
+    const d = await decideStopHook(input, fake(null), memoryHookState());
     expect(d.block).toBe(false);
   });
 
-  it("loop-guard: does not re-block if a prior continuation left the queue undrained", async () => {
-    const d = await decideStopHook({ ...input, stopHookActive: true }, fake(3));
-    expect(d.block).toBe(false); // agent already asked and hasn't drained → let it idle, queue is durable
+  it("loop-guard: does not re-drive while the queue sits undrained (drain generation unchanged)", async () => {
+    const state = memoryHookState();
+    // First stop drives at drains=0.
+    expect((await decideStopHook(input, fake({ pending: 3, drains: 0 }), state)).block).toBe(true);
+    // Next stop, still undrained (drains unchanged) → the agent ignored us → suppress, no spin.
+    expect((await decideStopHook(input, fake({ pending: 3, drains: 0 }), state)).block).toBe(false);
   });
 
-  it("re-arms after a drain: blocks on fresh feedback even when stop_hook_active is set", async () => {
-    // Queue empty at entry (agent drained), but a new mark lands during the park.
-    const d = await decideStopHook({ ...input, stopHookActive: true }, fake(0, 1));
+  it("re-drives when a drain advanced the generation (mid-turn batch is genuinely new)", async () => {
+    const state = memoryHookState();
+    // Drove at drains=0…
+    await decideStopHook(input, fake({ pending: 1, drains: 0 }), state);
+    // …agent drained (drains→1) and a fresh mark landed → drive again, not stranded.
+    const d = await decideStopHook(input, fake({ pending: 1, drains: 1 }), state);
+    expect(d.block).toBe(true);
+  });
+
+  it("re-drives after a drain even from the idle park path", async () => {
+    const state = memoryHookState();
+    // Queue empty at entry (agent drained), but a new mark lands during the /wait park.
+    const d = await decideStopHook(
+      input,
+      fake({ pending: 0, drains: 1 }, { pending: 1, drains: 1 }),
+      state,
+    );
     expect(d.block).toBe(true);
   });
 
   it("wires end-to-end through the real HTTP transport", async () => {
-    await post("/feedback", feedback("e2e"));
-    const d = await decideStopHook(input, httpTransport(base));
+    const session = "e2e-wire";
+    await post("/feedback", { session, id: "e2e", kind: "message", text: "e2e" });
+    const d = await decideStopHook(
+      { session, endpoint: base, timeoutMs: 0 },
+      httpTransport(base),
+      memoryHookState(),
+    );
     expect(d.block).toBe(true);
     expect(d.reason).toContain("nitpicker feedback");
-    await fetch(`${base}/poll?session=${SESSION}&timeoutMs=2000`); // drain to reset
+    await fetch(`${base}/poll?session=${session}&timeoutMs=2000`); // drain to reset
+  });
+
+  it("mid-turn regression: a batch that lands after the agent drains is re-driven, not stranded", async () => {
+    const session = "midturn";
+    const state = memoryHookState();
+    // batch1 queued; the hook drives (records drive at drains=0).
+    await post("/feedback", { session, id: "b1", kind: "message", text: "b1" });
+    expect(
+      (await decideStopHook({ session, endpoint: base, timeoutMs: 0 }, httpTransport(base), state))
+        .block,
+    ).toBe(true);
+    // Agent drains batch1 → drains advances to 1.
+    await fetch(`${base}/poll?session=${session}&timeoutMs=2000`);
+    // batch2 arrives "mid-turn"; the next stop must re-drive (drains advanced), not idle.
+    await post("/feedback", { session, id: "b2", kind: "message", text: "b2" });
+    expect(
+      (await decideStopHook({ session, endpoint: base, timeoutMs: 0 }, httpTransport(base), state))
+        .block,
+    ).toBe(true);
+    await fetch(`${base}/poll?session=${session}&timeoutMs=2000`); // drain to reset
+  });
+
+  it("ignored-loop regression: without draining, a second stop does not re-drive (no infinite loop)", async () => {
+    const session = "ignored";
+    const state = memoryHookState();
+    await post("/feedback", { session, id: "b1", kind: "message", text: "b1" });
+    expect(
+      (await decideStopHook({ session, endpoint: base, timeoutMs: 0 }, httpTransport(base), state))
+        .block,
+    ).toBe(true);
+    // No drain happened → drains unchanged → the second stop must NOT re-drive.
+    expect(
+      (await decideStopHook({ session, endpoint: base, timeoutMs: 0 }, httpTransport(base), state))
+        .block,
+    ).toBe(false);
+    await fetch(`${base}/poll?session=${session}&timeoutMs=2000`); // drain to reset
   });
 });
 
