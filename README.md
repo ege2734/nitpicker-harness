@@ -45,6 +45,20 @@ npm run poll -- --session nitpicker
 `poll` prints a batch and exits (add `--watch` to keep receiving). Each item is a `region` (local PNG
 path, red box burned in), an `element` (component/selector/text/route), or a `message`.
 
+### Two modes: feedback proxy vs. builder shell
+
+The harness fronts your app in two ways, advertised side by side in the ready banner:
+
+- **Feedback-proxy mode** (the URL above) — the overlay is injected straight into your app's HTML, so the
+  bottom-center dock rides on the live page. Full region + element + message capture. The fallback for
+  apps you don't control.
+- **Builder-shell mode** (`http://127.0.0.1:4000/__nitpicker-harness/shell`) — a shell page served on the
+  harness origin that embeds your app in a same-origin `<iframe src="/">` and hosts the chat + queue in
+  the **parent** window. Because the chrome lives outside the app frame, the queue **survives any
+  in-iframe navigation** — SPA route change, hard reload, even a cross-origin excursion — with zero extra
+  code. Phase 1 is chat + `Send to agent` only (no region/element yet; those lift into the parent in later
+  phases). Both modes POST to the same sidecar, so `poll` drains either.
+
 ### Keep the agent driven
 
 `poll` only delivers while the agent is actively running it — once a turn ends and the agent goes idle,
@@ -73,6 +87,7 @@ nitpicker-harness shutdown [--endpoint <url>]
                  │  strip X-Frame-Options, relax CSP (frame-ancestors/script-src/connect-src/style-src)
                  │  forwards the HMR WebSocket (hot-reload survives)
                  │  serves /__nitpicker-harness/overlay.js  (esbuild IIFE, html2canvas inlined)
+                 │  serves /__nitpicker-harness/shell(.js)   (builder-shell page + parent-chrome bundle)
                  ▼
              sidecar (:5178)  ◀── overlay POSTs feedback ──   agent `poll` drains it
                    ▲                                            ▲
@@ -86,6 +101,9 @@ nitpicker-harness shutdown [--endpoint <url>]
 - **`src/overlay/`** — the browser entry that calls `Nitpicker.mount()` from the reused core, bundled by
   esbuild into a single self-contained IIFE served to the proxied page (config rides on the script
   URL's query string, so no inline script is needed).
+- **`src/shell/`** — the builder-shell mode: `inject.ts:shellPage` renders the parent page (the app in a
+  same-origin iframe + the chat/queue chrome), and `entry.ts` (bundled by esbuild, mirroring the overlay)
+  is the parent-window chrome that reuses the vendored `core/transport.ts` to POST the queue to the sidecar.
 - **`vendor/nitpicker/`** — nitpicker's `core/` (overlay, region, elements, redbox, transport), the
   React `resolveElement` glue, the `server/` sidecar, and the `cli/` poll/verify — copied in so this
   repo is self-contained (it becomes nitpicker's canonical home when nitpicker is archived).
@@ -113,6 +131,9 @@ which also brings prod-safety gates. The harness's sweet spot is *no target chan
 - ✅ HMR WebSocket forwarded (raw-socket tunnel; `Origin` stripped so Turbopack's dev-origin gate
   returns `101`) — editing the source hot-reloads the proxied page, overlay intact.
 - ✅ `X-Frame-Options` stripped, CSP `frame-ancestors` dropped + `script-src`/`connect-src`/`style-src` relaxed.
+- ✅ Builder-shell mode: parent-hosted chat + queue over a same-origin iframe; the queue survives SPA nav,
+  hard reload, and a cross-origin excursion, and its batch drains via `poll` (chat/send-to-sidecar only in
+  Phase 1 — region/element lift into the parent in later phases).
 
 **Deferred (follow-ups, not blockers):**
 

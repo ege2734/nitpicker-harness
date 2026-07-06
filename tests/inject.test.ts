@@ -8,7 +8,9 @@ import {
   rewriteAbsoluteUrls,
   relaxCsp,
   relaxSecurityHeaders,
+  shellPage,
   OVERLAY_PATH,
+  SHELL_JS_PATH,
 } from "../src/proxy/inject";
 
 const CFG = { session: "demo", endpoint: "http://127.0.0.1:5178" };
@@ -60,6 +62,30 @@ describe("injectOverlay", () => {
     const twice = injectOverlay(once, CFG);
     expect(twice).toBe(once);
     expect(twice.match(/data-nitpicker-harness="overlay"/g)?.length).toBe(1);
+  });
+});
+
+describe("shellPage", () => {
+  it("embeds the same-origin app iframe and the shell bundle carrying config", () => {
+    const html = shellPage(CFG);
+    expect(html).toContain("<!doctype html>");
+    // the app is embedded as a same-origin iframe rooted at the harness origin
+    expect(html).toContain('<iframe id="nh-frame" src="/"');
+    // the shell bundle is loaded with session + endpoint on the query string (no inline script)
+    expect(html).toContain(SHELL_JS_PATH);
+    expect(html).toContain("session=demo");
+    expect(html).toContain("endpoint=http%3A%2F%2F127.0.0.1%3A5178");
+    expect(html).toContain('data-nitpicker-harness="shell"');
+    // the chrome mount points the entry wires onto are present
+    expect(html).toContain('id="nh-chat"');
+    expect(html).toContain('id="nh-queue"');
+    expect(html).toContain('id="nh-send-btn"');
+  });
+
+  it("escapes the session id so it cannot break out of the markup", () => {
+    const html = shellPage({ session: `x"<img>`, endpoint: "http://127.0.0.1:5178" });
+    expect(html).not.toContain(`x"<img>`);
+    expect(html).toContain("x&quot;&lt;img&gt;");
   });
 });
 

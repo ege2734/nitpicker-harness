@@ -13,6 +13,12 @@
 // own routes.
 export const HARNESS_PREFIX = "/__nitpicker-harness";
 export const OVERLAY_PATH = `${HARNESS_PREFIX}/overlay.js`;
+// The "builder shell" mode (viability report §6 / Phase 1): a page served from the harness origin that
+// embeds the proxied app in a same-origin <iframe> and hosts the chat + queue in the PARENT window, so
+// persistence across in-iframe navigation is structural (the chrome lives outside the app frame). This
+// is additive — the injected `overlay.js` "feedback proxy" mode above stays as the fallback.
+export const SHELL_PATH = `${HARNESS_PREFIX}/shell`;
+export const SHELL_JS_PATH = `${HARNESS_PREFIX}/shell.js`;
 
 export interface InjectConfig {
   /** sidecar session id (matched by `nitpicker-harness poll --session <id>`). */
@@ -26,6 +32,98 @@ export interface InjectConfig {
 export function overlayScriptTag(cfg: InjectConfig): string {
   const q = new URLSearchParams({ session: cfg.session, endpoint: cfg.endpoint }).toString();
   return `<script src="${OVERLAY_PATH}?${q}" data-nitpicker-harness="overlay"></script>`;
+}
+
+/** The parent "builder shell" page (served at SHELL_PATH, on the harness origin). It embeds the proxied
+ *  app in a same-origin `<iframe src="/">` and loads the shell bundle (SHELL_JS_PATH) which builds the
+ *  chat + queue chrome in THIS parent window. Because the chrome lives in the parent heap, it survives any
+ *  navigation the iframe does — SPA route change, hard reload, even a cross-origin excursion — with zero
+ *  extra work (viability report §3). Config rides on the bundle URL's query string (like the overlay), so
+ *  no inline <script> is needed. Pure/string-only so it stays unit-testable. */
+export function shellPage(cfg: InjectConfig): string {
+  const q = new URLSearchParams({ session: cfg.session, endpoint: cfg.endpoint }).toString();
+  const sessionText = escapeHtml(cfg.session);
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>nitpicker-harness · builder shell</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; height: 100vh; overflow: hidden;
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #0b0d10; color: #e6e8eb;
+  }
+  #nh-stage { position: relative; flex: 1 1 auto; min-width: 0; background: #fff; }
+  #nh-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  #nh-chat {
+    flex: 0 0 340px; width: 340px; height: 100%; display: flex; flex-direction: column;
+    border-left: 1px solid #23272e; background: #14171b;
+  }
+  .nh-hdr { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #23272e; }
+  .nh-hdr .nh-title { font-weight: 600; letter-spacing: .2px; }
+  .nh-hdr .nh-sess { margin-left: auto; font-size: 11px; color: #8b929c; }
+  .nh-count {
+    display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px;
+    padding: 0 6px; border-radius: 10px; background: #2b5cff; color: #fff; font-size: 11px; font-weight: 600;
+  }
+  .nh-queue { flex: 1 1 auto; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .nh-empty { color: #6b727c; font-style: italic; padding: 8px 2px; }
+  .nh-item { position: relative; padding: 8px 28px 8px 10px; border: 1px solid #262b33; border-radius: 8px; background: #1a1e24; white-space: pre-wrap; word-break: break-word; }
+  .nh-item .nh-item-route { display: block; margin-top: 4px; font-size: 10px; color: #6b727c; }
+  .nh-item .nh-del { position: absolute; top: 4px; right: 6px; border: 0; background: transparent; color: #6b727c; cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; }
+  .nh-item .nh-del:hover { color: #e06c6c; }
+  .nh-compose { border-top: 1px solid #23272e; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .nh-compose textarea {
+    resize: none; width: 100%; min-height: 56px; max-height: 160px; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid #2b313a; background: #0e1114; color: #e6e8eb; font: inherit;
+  }
+  .nh-compose textarea:focus { outline: none; border-color: #2b5cff; }
+  .nh-row { display: flex; gap: 8px; }
+  .nh-btn { flex: 1 1 auto; padding: 8px 10px; border-radius: 8px; border: 1px solid #2b313a; background: #1f242c; color: #e6e8eb; font: inherit; font-weight: 600; cursor: pointer; }
+  .nh-btn:hover:not(:disabled) { background: #262c35; }
+  .nh-btn:disabled { opacity: .5; cursor: default; }
+  .nh-btn.nh-send { background: #2b5cff; border-color: #2b5cff; color: #fff; }
+  .nh-btn.nh-send:hover:not(:disabled) { background: #3f6bff; }
+  .nh-status { min-height: 16px; font-size: 11px; color: #8b929c; }
+  .nh-status.nh-ok { color: #4caf7d; }
+  .nh-status.nh-err { color: #e06c6c; }
+</style>
+</head>
+<body>
+  <div id="nh-stage"><iframe id="nh-frame" src="/" title="proxied app"></iframe></div>
+  <aside id="nh-chat" aria-label="nitpicker feedback">
+    <div class="nh-hdr">
+      <span class="nh-title">nitpicker</span>
+      <span class="nh-count" id="nh-count">0</span>
+      <span class="nh-sess">${sessionText}</span>
+    </div>
+    <div class="nh-queue" id="nh-queue"></div>
+    <div class="nh-compose">
+      <textarea id="nh-input" placeholder="Describe a change… (Enter to queue, Shift+Enter for newline)"></textarea>
+      <div class="nh-row">
+        <button class="nh-btn" id="nh-queue-btn" type="button">Queue</button>
+        <button class="nh-btn nh-send" id="nh-send-btn" type="button" disabled>Send to agent</button>
+      </div>
+      <div class="nh-status" id="nh-status"></div>
+    </div>
+  </aside>
+  <script src="${SHELL_JS_PATH}?${q}" data-nitpicker-harness="shell"></script>
+</body>
+</html>`;
+}
+
+/** Minimal HTML-text escaping for values interpolated into the shell page (the session id). */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 /** Insert the overlay script into an HTML document. Prefers just before </body>; falls back to </head>,

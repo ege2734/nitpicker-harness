@@ -75,6 +75,27 @@ describe("proxy harness (e2e)", () => {
     expect(js).toContain("np-dock");
   }, 30_000);
 
+  it("serves the builder-shell page embedding a same-origin app iframe", async () => {
+    const res = await fetch(harness.url + "/__nitpicker-harness/shell");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const html = await res.text();
+    expect(html).toContain('<iframe id="nh-frame" src="/"'); // proxied app, same origin
+    expect(html).toContain("/__nitpicker-harness/shell.js");
+    expect(html).toContain("session=demo");
+    expect(html).toContain('id="nh-send-btn"');
+  });
+
+  it("serves the shell bundle with the reused core transport", async () => {
+    const res = await fetch(harness.url + "/__nitpicker-harness/shell.js");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("javascript");
+    const js = await res.text();
+    // the bundle wires the parent chrome and POSTs to the sidecar via the reused Transport
+    expect(js).toContain("builder shell mounted");
+    expect(js).toContain("/feedback");
+  }, 30_000);
+
   it("passes non-HTML assets through untouched", async () => {
     const res = await fetch(harness.url + "/asset.json");
     expect(res.headers.get("content-type")).toContain("application/json");

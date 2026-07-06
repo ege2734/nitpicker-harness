@@ -21,6 +21,16 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   bundled by **esbuild** into one IIFE with html2canvas inlined, served at
   `/__nitpicker-harness/overlay.js`. Config (session/endpoint) rides on the script URL's query string —
   no inline script, so a strict `script-src 'self'` still runs it.
+- `src/shell/entry.ts` + `build.ts` — the **builder-shell** mode (viability report §6 / Phase 1), a
+  SECOND mode that is additive, not a replacement. The shell page (`inject.ts:shellPage`, served at
+  `/__nitpicker-harness/shell`) embeds the proxied app in a same-origin `<iframe src="/">` and hosts the
+  chat + queue in the **PARENT** window (bundle served at `/__nitpicker-harness/shell.js`). Because the
+  chrome lives in the parent heap, it survives ANY navigation the iframe does — SPA route change, hard
+  reload, even a cross-origin excursion — with **zero** extra work; persistence is structural (this is
+  why the `nh-persist-nav` localStorage idea was dropped). Reuses `vendor/nitpicker/core/transport.ts` +
+  `types.ts` for the sidecar POST. Phase 1 is chat + send-to-sidecar only (no html2canvas/overlay engine;
+  those lift into the parent in Phases 2–4). The injected `overlay.js` "feedback proxy" mode stays as the
+  fallback for apps we don't control.
 - `src/cli.ts` + `bin/nitpicker-harness` — CLI; spawns the vendored sidecar and starts the proxy. Also
   exposes `stop-hook` (the turn-end driver) and `pending` (cheap queued-count signal).
 - `src/hook.ts` — the **feedback driver**: a Claude-Code Stop-hook that parks on the sidecar's `/wait`
@@ -48,8 +58,17 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   per-session `drains` generation counter in `store.ts` (`drainCount`, bumped only on a real delivery)
   that both endpoints report. They are marked in-file; preserve them on re-sync (same rule as the
   `react-source.ts` patch). Draining stays exclusive to `/poll`, so these can never race away an item.
-- **Overlay bundle is cached in-process** (`build.ts`). After editing the overlay or vendored core,
-  **restart the harness** — a reload alone serves the stale cached bundle.
+- **Overlay AND shell bundles are cached in-process** (`overlay/build.ts`, `shell/build.ts`). After
+  editing either browser entry or the vendored core, **restart the harness** — a reload alone serves the
+  stale cached bundle.
+- **Read `document.currentScript` config SYNCHRONOUSLY at module load, never in a deferred callback.**
+  Both browser entries carry their session/endpoint on their `<script src>` query string. `currentScript`
+  is only non-null while the script executes synchronously; a script injected at end-of-`<body>` runs
+  while `document.readyState === "loading"`, so if you defer the read into a `DOMContentLoaded` handler it
+  fires with `currentScript === null` and you **silently fall back to the default endpoint** (a POST to a
+  dead `:5178` → "Failed to fetch"). `src/shell/entry.ts` captures the config in a top-level `CONFIG` const
+  and reuses it in `mount()`; the overlay dodges this only because it mounts synchronously when `body`
+  already exists. This was a real Phase-1 bug found in-browser.
 - **Sidecar port conflicts:** default 5178 is shared with any running nitpicker install. Use
   `--sidecar-port` (and matching `--endpoint`) to isolate; `--no-sidecar` to reuse an external one.
 - To avoid gzip handling on the injection path, the proxy sends `accept-encoding: identity` upstream and
