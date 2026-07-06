@@ -173,6 +173,12 @@ npm test            # vitest: proxy injection (tests/) + overlay engine (vendor/
 
 See [`AGENTS.md`](./AGENTS.md) for repo-specific notes.
 
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and conventions, and the
+[Code of Conduct](./CODE_OF_CONDUCT.md). Please report security issues privately, not as public issues —
+see [SECURITY.md](./SECURITY.md). Notable changes are tracked in [CHANGELOG.md](./CHANGELOG.md).
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).
