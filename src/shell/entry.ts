@@ -113,12 +113,13 @@ class ShellChrome {
   private async send(): Promise<void> {
     if (this.sending || this.queue.length === 0) return;
     this.sending = true;
-    const n = this.queue.length;
+    const batch = this.queue.slice();
+    const n = batch.length;
     this.render();
     this.setStatus(`Sending ${n} item${n === 1 ? "" : "s"}…`);
     try {
-      await this.transport.sendBatch(this.queue);
-      this.queue = [];
+      await this.transport.sendBatch(batch);
+      this.queue = this.queue.filter((i) => !batch.includes(i));
       this.setStatus(`Sent ${n} item${n === 1 ? "" : "s"} to the agent.`, "ok");
     } catch (err) {
       this.setStatus(`Send failed: ${(err as Error).message}`, "err");
