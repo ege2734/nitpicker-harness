@@ -456,12 +456,15 @@ export class Overlay implements NitpickerHandle {
     snapshot: FrozenSnapshot,
     rect: Rect,
   ): Promise<{ blob: Blob; thumb: string }> {
+    // Take ownership of the holder away from the card-close path up front: from here the raster's `.finally`
+    // is its SOLE remover. This decouples cleanup from any unrelated in-flight raster — unfreeze() can then
+    // drop a still-set frozenHolder unconditionally (Cancel/Esc) without stranding one mid-raster.
+    if (this.frozenHolder === snapshot.holder) this.frozenHolder = null;
     this.pendingDockRasters++;
     return rasterizeFrozen(snapshot, this.scale)
       .then(({ canvas }) => annotateRegion(canvas, rect, this.scale, this.appWidth()))
       .finally(() => {
         snapshot.holder.remove();
-        if (this.frozenHolder === snapshot.holder) this.frozenHolder = null;
         this.pendingDockRasters--;
         this.setPaneLocked(this.paneLocked());
         this.maybeReconcileLayout();
@@ -625,9 +628,11 @@ export class Overlay implements NitpickerHandle {
     // outlives the card, so the pane must LOOK locked or its toggle silently no-ops.
     this.setPaneLocked(this.pendingDockRasters > 0);
     this.clearSnapshot();
-    // Drop the hotkey freeze backdrop when its card closes — UNLESS a raster is still reading it (Queue
-    // path: captureFrozenShot removes it in `.finally`). On Cancel/Esc no raster runs, so remove it here.
-    if (this.frozenHolder && this.pendingDockRasters === 0) {
+    // Drop the hotkey freeze backdrop when its card closes. If its own raster is in flight, captureFrozenShot
+    // already transferred ownership (nulled frozenHolder) and its `.finally` is the sole remover; so a set
+    // frozenHolder here always means Cancel/Esc with no raster reading it — remove it unconditionally,
+    // regardless of any unrelated dock raster still counted in pendingDockRasters.
+    if (this.frozenHolder) {
       this.frozenHolder.remove();
       this.frozenHolder = null;
     }

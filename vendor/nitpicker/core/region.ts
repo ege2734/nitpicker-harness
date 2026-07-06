@@ -110,12 +110,16 @@ export function buildFrozenClone(hostEl: Element, appWidthCss: number = window.i
   const viewport = { w: appWidthCss, h: window.innerHeight };
   const clone = document.body.cloneNode(true) as HTMLElement;
 
-  const decode = freezeCanvases(clone);
+  // Pair each scrolled LIVE element to its CLONE counterpart NOW, while the clone is still a pristine
+  // structural copy — before freezeCanvases() swaps each <canvas> for a childless <img> (dropping any
+  // canvas fallback children), which would desync a flat live-vs-clone index mapping for everything after
+  // it. We keep direct clone references, so the mapping survives that mutation; offsets are applied after
+  // layout. bakeHoverState/copyFormState also assume matching doc order, so run them before the swap too.
+  const scrolls = collectScrollOffsets(clone);
   bakeHoverState(clone);
   copyFormState(clone);
-  // Capture inner-scroll offsets from the LIVE tree now (before the holder is attached, so the live
-  // element collection is exactly the originals); they're re-applied to the clone once it's laid out.
-  const scrolls = collectScrollOffsets();
+  // Structure-mutating canvas swap runs LAST, so the doc-order-dependent passes above see an intact clone.
+  const decode = freezeCanvases(clone);
 
   const holder = document.createElement("div");
   holder.setAttribute("data-nitpicker", "frozen");
@@ -140,7 +144,7 @@ export function buildFrozenClone(hostEl: Element, appWidthCss: number = window.i
   // scroll offsets must be applied AFTER attach (only a laid-out element scrolls)
   scroller.scrollTop = window.scrollY;
   scroller.scrollLeft = window.scrollX;
-  applyScrollOffsets(clone, scrolls);
+  applyScrollOffsets(scrolls);
 
   return { holder, viewport, decode };
 }
@@ -175,9 +179,21 @@ export async function rasterizeFrozen(snapshot: FrozenSnapshot, scale: number): 
 function frozenBackdrop(): string {
   for (const el of [document.body, document.documentElement]) {
     const bg = getComputedStyle(el).backgroundColor;
-    if (bg && bg !== "transparent" && !bg.startsWith("rgba(0, 0, 0, 0")) return bg;
+    if (bg && !isFullyTransparent(bg)) return bg;
   }
   return "#ffffff";
+}
+
+/** True only when a computed background color paints nothing: the keyword `transparent`, or an rgb/rgba
+ *  whose alpha channel is exactly 0. A semi-transparent color (e.g. `rgba(0, 0, 0, 0.6)`) is NOT transparent
+ *  — it must be treated as an opaque-enough backdrop, not fall through to white. */
+function isFullyTransparent(bg: string): boolean {
+  if (bg === "transparent") return true;
+  const m = bg.match(/^rgba?\(([^)]*)\)$/);
+  if (!m) return false;
+  const parts = m[1].split(",").map((s) => s.trim());
+  if (parts.length < 4) return false; // rgb() has no alpha → opaque
+  return parseFloat(parts[3]) === 0;
 }
 
 /** Replace each `<canvas>` in the clone with an `<img>` of its current pixels (`cloneNode` blanks canvases
@@ -294,28 +310,34 @@ function copyFormState(clone: HTMLElement): void {
   }
 }
 
-/** Record the document-order index + offset of every scrolled inner container in the LIVE tree. Reading
- *  `scrollTop` is a cheap layout property (no style resolution); we only keep the ones actually scrolled. */
-function collectScrollOffsets(): Array<{ i: number; top: number; left: number }> {
+/** Record the scroll offset of every scrolled inner container in the LIVE tree, paired to a DIRECT reference
+ *  to its CLONE counterpart. Must be called while `clone` is still a pristine structural copy of the live
+ *  body (same element count + order), so the flat live↔clone index walk lines up; storing element references
+ *  (not integer indices) then keeps the pairing valid across later clone mutations like freezeCanvases (which
+ *  drops canvas fallback children and would otherwise shift every subsequent index). Reading `scrollTop` is a
+ *  cheap layout property (no style resolution); we only keep the ones actually scrolled. */
+function collectScrollOffsets(
+  clone: HTMLElement,
+): Array<{ el: HTMLElement; top: number; left: number }> {
   const live = document.body.getElementsByTagName("*");
-  const out: Array<{ i: number; top: number; left: number }> = [];
-  for (let i = 0; i < live.length; i++) {
+  const cloned = clone.getElementsByTagName("*");
+  const out: Array<{ el: HTMLElement; top: number; left: number }> = [];
+  for (let i = 0; i < live.length && i < cloned.length; i++) {
     const l = live[i] as HTMLElement;
-    if (l.scrollTop || l.scrollLeft) out.push({ i, top: l.scrollTop, left: l.scrollLeft });
+    if (l.scrollTop || l.scrollLeft) {
+      out.push({ el: cloned[i] as HTMLElement, top: l.scrollTop, left: l.scrollLeft });
+    }
   }
   return out;
 }
 
-/** Re-apply recorded scroll offsets to the clone (a structural clone resets `scrollTop`/`Left` to 0). Must
- *  run after the clone is attached + laid out. Indices line up because the clone is a structural copy. */
-function applyScrollOffsets(clone: HTMLElement, scrolls: Array<{ i: number; top: number; left: number }>): void {
-  const cloned = clone.getElementsByTagName("*");
-  for (const { i, top, left } of scrolls) {
-    const c = cloned[i] as HTMLElement | undefined;
-    if (c) {
-      c.scrollTop = top;
-      c.scrollLeft = left;
-    }
+/** Re-apply recorded scroll offsets to the clone (a structural clone resets `scrollTop`/`Left` to 0), via the
+ *  clone element references captured in {@link collectScrollOffsets}. Must run after the clone is attached +
+ *  laid out (only a laid-out element scrolls). */
+function applyScrollOffsets(scrolls: Array<{ el: HTMLElement; top: number; left: number }>): void {
+  for (const { el, top, left } of scrolls) {
+    el.scrollTop = top;
+    el.scrollLeft = left;
   }
 }
 
