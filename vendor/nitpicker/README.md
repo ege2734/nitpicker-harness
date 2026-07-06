@@ -27,8 +27,9 @@ What's here and how the harness uses it:
   "Local modifications" below) that backs the feedback driver.
 - **`cli/poll.ts`, `cli/verify.ts`** — the agent's long-poll client and the prod-leak scanner. `poll` is
   reused by `nitpicker-harness poll`.
-- **`next/`** — the dev-only Babel source-stamp loader/plugin. Not on the harness's default path;
-  documented as the **opt-in** for exact `file:line:col` (wire into the *target's* `next.config`).
+- **`next/`** — the dev-only Babel source-stamp loader/plugin plus `with-nitpicker-source.cjs`, the
+  one-line `withNitpickerSource(nextConfig)` wrapper that composes them into the *target's* `next.config`.
+  Wired as a **standard setup step** for exact `file:line:col` on owned Next builds (see `SKILL.md`).
 - **`tests/`** — nitpicker's units for the reused core (selector, red-box math, React glue, sidecar
   drain, prod guard, plus the docked-pane/pane-lock/item-modal/hotkey/instant-region overlay behavior),
   run by this repo's vitest to prove the vendored code still behaves.

@@ -1,5 +1,5 @@
-// nitpicker-harness CLI. One command launches the whole thing: the reused nitpicker sidecar (transport
-// server) plus the reverse proxy that fronts your target dev server and injects the overlay.
+// nitpicker-harness CLI. One command launches the whole thing: the vendored sidecar (transport server)
+// plus the reverse proxy that fronts your target dev server and injects the overlay.
 //
 //   nitpicker-harness --target http://localhost:3000        start sidecar + proxy (open the printed URL)
 //   nitpicker-harness poll --session <id>                   the agent's long-poll for feedback batches
@@ -8,8 +8,8 @@
 //   nitpicker-harness health                                check the sidecar is up
 //   nitpicker-harness shutdown                              stop the sidecar
 //
-// The reused sidecar + poll come verbatim from nitpicker (vendor/nitpicker/{server,cli}); the proxy +
-// overlay injection are the harness's own code (src/proxy, src/overlay).
+// The sidecar + poll live under vendor/nitpicker/{server,cli}; the proxy + overlay injection are the
+// harness's own code (src/proxy, src/overlay).
 import { spawn, type ChildProcess } from "node:child_process";
 import { get, request } from "node:http";
 import { fileURLToPath } from "node:url";
@@ -43,7 +43,7 @@ function usage(): void {
   );
 }
 
-/** Spawn the reused nitpicker sidecar (vendor/nitpicker/server) under tsx, forwarding its stdio. */
+/** Spawn the vendored sidecar (vendor/nitpicker/server) under tsx, forwarding its stdio. */
 function startSidecar(port: number): ChildProcess {
   const server = join(HERE, "..", "vendor", "nitpicker", "server", "index.ts");
   const proc = spawn(process.execPath, [tsxLoader(), server], {

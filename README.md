@@ -1,22 +1,23 @@
 # nitpicker-harness
 
-**Point it at a running web app and get the full [nitpicker](https://github.com/ege2734/nitpicker)
-feedback overlay — with zero nitpicker code in the target's repo.**
+**Point it at a running web app and get the full feedback overlay — with zero overlay code in the
+target's repo.**
 
 nitpicker-harness is a standalone **same-origin reverse proxy**. It fronts a target dev server under its
-own origin and rewrites the streamed HTML on the fly to inject `@nitpicker/core`. Because the page then
-runs *same-origin* with the overlay, every nitpicker feature works unmodified:
+own origin and rewrites the streamed HTML on the fly to inject the overlay. Because the page then runs
+*same-origin* with the overlay, every feature works unmodified:
 
 - 🖼️ **Region screenshots** — drag a box; the app's live DOM is rasterized (html2canvas) with a red box
   burned in and everything else dimmed.
 - 🎯 **Element pick** — click a node; get its React **component** name (runtime fiber walk, no build
-  step), a stable CSS **selector**, testid, text, role, rect, and route.
+  step), the exact **`source`** `file:line:col` (owned Next builds — wired in setup), a stable CSS
+  **selector**, testid, text, role, rect, and route.
 - 💬 **Chat / queue → sidecar** — batch feedback and `Send to agent`; the agent long-polls it off a
   local sidecar.
 
-All of it with **zero source edits, no layout change, and no `next.config` touch** in the target. The
-harness reuses nitpicker's `core/`, `server/`, and `cli/` verbatim (vendored under `vendor/nitpicker/`);
-the only new code is the proxy + injection glue and the overlay bundler.
+All of it with **zero source edits and no layout change** in the target. The proxy + injection glue, the
+overlay engine, the sidecar, and the `poll` CLI all live in this repo (the browser engine and sidecar
+under `vendor/nitpicker/`, wrapped by the proxy in `src/`).
 
 > **Why a proxy and not an iframe?** The browser's Same-Origin Policy blocks a page from reading a
 > cross-origin iframe's DOM — which is exactly what html2canvas, the selector builder, and the fiber
@@ -43,7 +44,8 @@ npm run poll -- --session nitpicker
 ```
 
 `poll` prints a batch and exits (add `--watch` to keep receiving). Each item is a `region` (local PNG
-path, red box burned in), an `element` (component/selector/text/route), or a `message`.
+path, red box burned in), an `element` (component/selector/text/route, plus `source` file:line:col on an
+owned Next build), or a `message`.
 
 ### Two modes: feedback proxy vs. builder shell
 
@@ -100,30 +102,31 @@ nitpicker-harness shutdown [--endpoint <url>]
   `server.ts` wires it into an [`http-proxy`](https://github.com/http-party/node-http-proxy) instance
   for HTML injection, plus a hand-rolled raw-socket tunnel for the HMR WebSocket upgrade (http-proxy's
   own `ws` pass is off — see [`AGENTS.md`](./AGENTS.md)).
-- **`src/overlay/`** — the browser entry that calls `Nitpicker.mount()` from the reused core, bundled by
-  esbuild into a single self-contained IIFE served to the proxied page (config rides on the script
-  URL's query string, so no inline script is needed).
+- **`src/overlay/`** — the browser entry that mounts the overlay engine, bundled by esbuild into a single
+  self-contained IIFE served to the proxied page (config rides on the script URL's query string, so no
+  inline script is needed).
 - **`src/shell/`** — the builder-shell mode: `inject.ts:shellPage` renders the parent page (the app in a
   same-origin iframe + the chat/queue chrome), and `entry.ts` (bundled by esbuild, mirroring the overlay)
   is the parent-window chrome. It reuses the vendored `core/transport.ts` to POST the queue and drives the
   region/element engine primitives against the iframe via the reused `Env` seam (`geometry.ts` holds the
   single-offset coordinate math that keeps the highlight/red box over the frame).
-- **`vendor/nitpicker/`** — nitpicker's `core/` (overlay, region, elements, redbox, transport), the
-  React `resolveElement` glue, the `server/` sidecar, and the `cli/` poll/verify — copied in so this
-  repo is self-contained (it becomes nitpicker's canonical home when nitpicker is archived).
+- **`vendor/nitpicker/`** — the overlay engine (`core/`: overlay, region, elements, redbox, transport),
+  the React `resolveElement` glue, the `server/` sidecar, the `cli/` poll/verify, and the `next/`
+  dev-only source-stamp loader — the browser + sidecar half of the harness, kept here so the repo is
+  self-contained.
 
-## The one honest limit: `file:line:col` source
+## `file:line:col` source location
 
-A proxy sees the dev server's already-compiled output, so it can't manufacture exact source locations
-for an arbitrary app. **`component` + `selector` + `text` + `route` are the baseline** (and are enough
-for an agent to grep to the code) — **apps without the stamp keep working, just without `file:line`.**
-Exact `file:line:col` is an **owned-build-only opt-in**: wire the vendored dev-only source-stamp loader
-(`vendor/nitpicker/next/`) into the target's `next.config` — one config block, no source edits. Once
-wired, the picker prefers `source` and it rides both the builder-shell chat item and the drained `poll`
-payload (e.g. `source: "app/pricing-card.tsx:9:5"`). The exact one-liner (Turbopack `turbopack.rules` +
-webpack fallback, both gated on `NODE_ENV`) is in [SKILL.md](./SKILL.md#opt-in-exact-filelinecol-source-owned-build-only).
-If you can add it, prefer the full [nitpicker install skill](https://github.com/ege2734/nitpicker),
-which also brings prod-safety gates. The harness's sweet spot is still *no target changes at all*.
+On an **owned Next build**, element pick reports the exact `file:line:col` of the clicked node — it rides
+both the builder-shell chat item and the drained `poll` payload (e.g.
+`source: "app/pricing-card.tsx:11:7"`). Setup wires it on as a standard step: add `@babel/core` to the
+target, copy `vendor/nitpicker/next/` in, and wrap the target's `next.config` export with
+`withNitpickerSource(...)` — one import, one wrapped line, composes with any existing config, dev-only
+(off in `next build`). The full recipe is in [SKILL.md](./SKILL.md#turn-on-filelinecol-source-default-setup-step).
+
+The stamp **detects-and-skips cleanly**: an app you don't own, or one that isn't Next/Turbopack, needs
+none of it and still returns `component` + `selector` + `text` + `route` on every pick — enough for an
+agent to grep straight to the code.
 
 ## Status: Phase 1 (localhost dev proxy) — done vs. deferred
 
@@ -143,16 +146,15 @@ which also brings prod-safety gates. The harness's sweet spot is still *no targe
   hard reload, and a cross-origin excursion, and its batch drains via `poll`. The interactive layer runs
   from the parent too — region drag → screenshot and element pick → component/selector read out of the
   iframe and rendered over it (Phase 2).
-- ✅ Owned-build `file:line:col` provenance (Phase 3): a one-line `next.config` opt-in (the vendored
-  dev-only source-stamp loader) makes the picker surface `source` in the chat item **and** the drained
-  `poll` payload; apps without it degrade gracefully to component + selector + text + route.
+- ✅ Owned-build `file:line:col` provenance (Phase 3): a default setup step (the `withNitpickerSource`
+  wrapper around the target's `next.config`, dev-only) makes the picker surface `source` in the chat item
+  **and** the drained `poll` payload; apps that skip it degrade cleanly to component + selector + text + route.
 - ✅ Inline click-to-edit text (Phase 4): an "edit" mode makes the picked node `contenteditable` in the
   iframe; on save the before/after text rides a source-keyed `text-edit` mark that `poll` prints as
   `source` → `old → new` for the agent to patch. Without a source stamp it degrades to selector + text.
 
 **Deferred (follow-ups, not blockers):**
 
-- ⏭️ Exact `file:line:col` without any target change (fundamentally needs build cooperation — opt-in only).
 - ⏭️ Hard auth flows / third-party IdP redirects; SameSite-cookie edge cases.
 - ⏭️ Non-Next frameworks (Vite/React, Streamlit) — the proxy is framework-agnostic but only Next is
   verified so far.
@@ -163,11 +165,11 @@ which also brings prod-safety gates. The harness's sweet spot is still *no targe
 
 ```bash
 npm run typecheck   # tsc --noEmit
-npm test            # vitest: proxy injection (tests/) + reused core (vendor/nitpicker/tests/)
+npm test            # vitest: proxy injection (tests/) + overlay engine (vendor/nitpicker/tests/)
 ```
 
 See [`AGENTS.md`](./AGENTS.md) for repo-specific notes.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE). Reuses code from [nitpicker](https://github.com/ege2734/nitpicker) (MIT).
+MIT — see [LICENSE](./LICENSE).

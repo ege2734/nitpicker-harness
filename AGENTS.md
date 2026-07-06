@@ -34,12 +34,20 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   the parent reading into the iframe via the reused engine's `Env` seam (below). `src/shell/geometry.ts`
   holds the §5 single-offset coordinate math (pure, unit-tested). The injected `overlay.js` "feedback
   proxy" mode stays as the fallback for apps we don't control. **Phase 3 (landed)** made `file:line:col`
-  source provenance a first-class **owned-build-only** opt-in: the shell chat item surfaces `source` as
-  its own `nh-item-source` chip and it already rides the wire (`serializeItem` carries the whole
-  `element`, so no transport change was needed — Phase 3 is UI surfacing + docs + confirming the stamp
-  under Next 16). Apps without the build stamp degrade to `component + selector + text + route` with no
-  error. The one-line `next.config` wiring is documented in `SKILL.md` / `README.md`; the build-time
-  stamp is regression-tested in `tests/source-stamp.test.ts`. **Phase 4 (landed — the finale)** added
+  source provenance work on any owned Next build: the shell chat item surfaces `source` as its own
+  `nh-item-source` chip and it already rides the wire (`serializeItem` carries the whole `element`, so no
+  transport change was needed). Apps without the build stamp degrade to `component + selector + text +
+  route` with no error. Wiring is now a **standard setup step, not an opt-in** — `SKILL.md` has the agent
+  wire it by default on owned Next apps via `vendor/nitpicker/next/with-nitpicker-source.cjs`, a one-line
+  `withNitpickerSource(nextConfig)` wrapper that composes the dev-only source-stamp loader into
+  `turbopack.rules` + a webpack fallback (spreads, never clobbers; gated on `NODE_ENV`, so `next build` is
+  untouched; loader path resolved from the wrapper's own `__dirname`, so it's cwd-independent). **The
+  target app must have `@babel/core` installed** — the loader dynamic-imports it to transform JSX; without
+  it the loader logs `source-stamp skipped … Cannot find package '@babel/core'` and passes the file
+  through unstamped (clean degradation, but no `source`). The wrapper + loader are regression-tested in
+  `tests/source-stamp.test.ts`; end-to-end verified through the proxy under Next 16 / Turbopack. **No
+  user-facing doc frames `file:line` as a limitation/drawback** — present element pick as returning a
+  source location; keep degradation notes internal. **Phase 4 (landed — the finale)** added
   **inline click-to-edit text**: a 4th "edit" mode reuses the Phase-2 pick surface, but the click terminal
   makes the picked iframe node `contenteditable` (the parent sets it on the same-origin node), and on
   blur/Enter captures `{ oldText, newText }` + the Phase-3 `element` descriptor into a new `"text-edit"`
@@ -192,4 +200,6 @@ a gitignored `/verify-app/` or the scratchpad is the standard fixture.)
 ## Scope
 
 Phase 1 = localhost dev proxy, Next.js reference target. Out of scope: browser extension, platform
-layer. `file:line:col` source is opt-in only (needs the target's bundler). See README "done vs deferred".
+layer. `file:line:col` source is wired by default on owned Next builds (needs the target's bundler +
+`@babel/core`); non-owned/non-Next apps degrade cleanly to component+selector+text+route. See README
+"done vs deferred".
