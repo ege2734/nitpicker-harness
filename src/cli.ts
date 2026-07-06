@@ -3,6 +3,8 @@
 //
 //   nitpicker-harness --target http://localhost:3000        start sidecar + proxy (open the printed URL)
 //   nitpicker-harness poll --session <id>                   the agent's long-poll for feedback batches
+//   nitpicker-harness stop-hook --session <id>              turn-end hook: drives the agent when a mark lands
+//   nitpicker-harness pending --session <id>                cheap "is feedback queued?" signal
 //   nitpicker-harness health                                check the sidecar is up
 //   nitpicker-harness shutdown                              stop the sidecar
 //
@@ -14,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { startHarness } from "./proxy/server";
 import { runPoll } from "../vendor/nitpicker/cli/poll";
+import { runStopHook } from "./hook";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SIDECAR_PORT = 5178;
@@ -32,6 +35,8 @@ function usage(): void {
     `nitpicker-harness — point at a running dev server and mark up feedback for your AI agent.\n\n` +
       `  nitpicker-harness --target <url> [--port <n>] [--session <id>] [--sidecar-port <n>] [--no-sidecar]\n` +
       `  nitpicker-harness poll --session <id> [--endpoint <url>] [--watch]\n` +
+      `  nitpicker-harness stop-hook --session <id> [--endpoint <url>] [--timeoutMs <n>]\n` +
+      `  nitpicker-harness pending --session <id> [--endpoint <url>]\n` +
       `  nitpicker-harness health [--endpoint <url>]\n` +
       `  nitpicker-harness shutdown [--endpoint <url>]\n\n` +
       `Then open the printed harness URL and use the bottom-center dock (Region / Element / message).\n`,
@@ -139,6 +144,28 @@ async function main(): Promise<void> {
         timeoutMs: Number(flag(argv, "timeoutMs")) || 0,
         watch: has(argv, "watch"),
       });
+    }
+    case "stop-hook": {
+      // Turn-end hook: parks on the sidecar and, when a mark lands, emits a Claude-Code block decision
+      // that re-invokes the agent to drain. See src/hook.ts and SKILL.md "Keep the agent driven".
+      const session = flag(argv, "session");
+      if (!session) {
+        process.stderr.write("usage: nitpicker-harness stop-hook --session <id> [--endpoint <url>] [--timeoutMs <n>]\n");
+        process.exit(1);
+      }
+      const endpoint = flag(argv, "endpoint") || `http://127.0.0.1:${DEFAULT_SIDECAR_PORT}`;
+      // 0 => park indefinitely; the Claude-Code hook `timeout` is the real wall-clock bound.
+      return runStopHook({ session, endpoint, timeoutMs: Number(flag(argv, "timeoutMs")) || 0 });
+    }
+    case "pending": {
+      const session = flag(argv, "session");
+      if (!session) {
+        process.stderr.write("usage: nitpicker-harness pending --session <id> [--endpoint <url>]\n");
+        process.exit(1);
+      }
+      const endpoint = flag(argv, "endpoint") || `http://127.0.0.1:${DEFAULT_SIDECAR_PORT}`;
+      process.stdout.write((await ping(endpoint, `/pending?session=${encodeURIComponent(session)}`, "GET")) + "\n");
+      return;
     }
     case "health": {
       const endpoint = flag(argv, "endpoint") || `http://127.0.0.1:${DEFAULT_SIDECAR_PORT}`;

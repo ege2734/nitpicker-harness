@@ -21,7 +21,12 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   bundled by **esbuild** into one IIFE with html2canvas inlined, served at
   `/__nitpicker-harness/overlay.js`. Config (session/endpoint) rides on the script URL's query string —
   no inline script, so a strict `script-src 'self'` still runs it.
-- `src/cli.ts` + `bin/nitpicker-harness` — CLI; spawns the vendored sidecar and starts the proxy.
+- `src/cli.ts` + `bin/nitpicker-harness` — CLI; spawns the vendored sidecar and starts the proxy. Also
+  exposes `stop-hook` (the turn-end driver) and `pending` (cheap queued-count signal).
+- `src/hook.ts` — the **feedback driver**: a Claude-Code Stop-hook that parks on the sidecar's `/wait`
+  (zero token cost) and, when a mark lands, emits `{"decision":"block","reason":…}` to re-invoke the
+  agent to drain via `poll`. `decideStopHook` is a pure, injectable-transport core (unit-tested in
+  `tests/driver.test.ts`); `httpTransport` is the live wiring. See "The feedback driver" below.
 - `vendor/nitpicker/` — code copied verbatim from nitpicker (see `vendor/nitpicker/README.md`), last
   synced from nitpicker `main` @ `a8d109b`. This repo is self-contained and must not depend back on the
   nitpicker repo. nitpicker is being archived, so this is the canonical home — do not upstream back.
@@ -38,12 +43,34 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   element-pick returns no `component` on React 19. This is a **harness-local delta upstream lacks** —
   when re-syncing `vendor/nitpicker/`, do NOT blind-copy `react-source.ts`/`react-source.test.ts`;
   preserve this patch (the rest of both files tracks upstream verbatim).
+- **`vendor/nitpicker/server/index.ts` carries a harness-local delta:** the `GET /pending` (cheap
+  count) and `GET /wait` (non-draining long-poll) endpoints the feedback driver needs. They are marked
+  in-file; preserve them on re-sync (same rule as the `react-source.ts` patch). Draining stays exclusive
+  to `/poll`, so these can never race away an item.
 - **Overlay bundle is cached in-process** (`build.ts`). After editing the overlay or vendored core,
   **restart the harness** — a reload alone serves the stale cached bundle.
 - **Sidecar port conflicts:** default 5178 is shared with any running nitpicker install. Use
   `--sidecar-port` (and matching `--endpoint`) to isolate; `--no-sidecar` to reuse an external one.
 - To avoid gzip handling on the injection path, the proxy sends `accept-encoding: identity` upstream and
   resets `content-length`/`transfer-encoding`/`content-encoding` on the rewritten HTML.
+
+## The feedback driver (idle agent → still gets driven)
+
+`poll`/`poll --watch` only delivers while the agent is actively running it. So feedback that lands after
+a turn ends would sit undriven. The driver closes that gap with the firstmate "blocking watcher +
+turn-end trigger" shape:
+
+- The sidecar queue is already **durable** (`store.drain` clears only on actual delivery), so a mark
+  queued while nothing is polling is never lost — it waits for the next `/poll`. This invariant is the
+  foundation; the endpoints below and the hook are additive.
+- `GET /wait` is the OS-level event source: a non-draining long-poll that resolves the instant the queue
+  is non-empty. The Stop-hook (`src/hook.ts`, `stop-hook` subcommand) parks on it at **zero token cost**.
+- When a mark lands, the hook emits `{"decision":"block","reason":…}`; the agent's harness re-invokes the
+  agent, which drains via `poll`. The hook is loop-safe (honours `stop_hook_active`) and **fails open**
+  (never wedges a stop if the sidecar is down). Documented as the default install in `SKILL.md`.
+- Install is a `Stop` hook in the target harness's `.claude/settings.json` with a large `timeout` (the
+  wall-clock ceiling the hook stays parked; Claude-Code hooks are hard-killed at `timeout`, no heartbeat
+  extension). On timeout the agent idles and the durable queue + next turn re-arm cover the gap.
 
 ## Commands
 

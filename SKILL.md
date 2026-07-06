@@ -36,10 +36,13 @@ npx nitpicker-harness --target http://localhost:3000
 
 Then:
 
-1. **Tell the human**: "Open **http://127.0.0.1:4000** and mark up the app with the bottom-center dock —
+1. **Arm the driver** (do this ONCE, up front — see "Keep the agent driven" below). This is what makes
+   feedback wake you even when you're idle between batches. Without it, marks the human sends after your
+   turn ends just sit in the sidecar until you happen to poll again.
+2. **Tell the human**: "Open **http://127.0.0.1:4000** and mark up the app with the bottom-center dock —
    drag a **Region** for a screenshot, click **Element** to pick a component, or type a message. Hit
    **Send to agent** when done." (The app renders exactly as at :3000, plus the dock.)
-2. **Drain the feedback** (long-poll; run it as a background task and act on the batch it prints):
+3. **Drain the feedback** whenever the driver tells you to (or manually):
 
    ```bash
    npx nitpicker-harness poll --session nitpicker
@@ -47,6 +50,54 @@ Then:
 
 Flags: `--port <n>` (harness port, default 4000), `--session <id>` (default `nitpicker`),
 `--sidecar-port <n>` (default 5178), `--no-sidecar` (if you already run one), `--endpoint <url>`.
+
+## Keep the agent driven (install the Stop hook) — the default, do this first
+
+Feedback must **drive** you, not wait for you to remember to poll. `poll` (even `poll --watch`) only
+delivers while you are actively running it; the moment a turn ends and you go idle, newly-queued marks
+sit in the sidecar and nothing re-invokes you. The fix is a **turn-end Stop hook** that parks on the
+sidecar with **zero token cost** and re-invokes you the instant a mark lands — the same "blocking watcher
++ turn-end trigger" pattern a supervisor uses to drive an idle worker.
+
+Install it once by adding a `Stop` hook to `.claude/settings.json` (project or user scope):
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx nitpicker-harness stop-hook --session nitpicker",
+            "timeout": 3600
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+- Match `--session` (and add `--endpoint http://127.0.0.1:<sidecar-port>` if you changed it) to how you
+  launched the harness.
+- The large `timeout` (seconds) is the wall-clock ceiling the harness stays *parked* on one idle stretch
+  — the hook blocks on a long-poll for that whole window at no token cost, so make it as long as your
+  session. When it does elapse with nothing pending, you simply go idle; the queue is durable, so the
+  next turn re-arms and picks up anything that arrived meanwhile.
+
+**How the loop runs, once armed:** you finish a turn → the Stop hook parks (blocked long-poll, zero
+tokens) → the human hits **Send** → the hook wakes instantly and returns a `block` decision that
+re-invokes you with "N feedback item(s) waiting — run `poll`" → you drain with `poll`, address every
+item, and stop → the hook re-arms. It is a no-op (lets you idle) when nothing is pending, and **fails
+open**: if the sidecar is down it never wedges your stop.
+
+If your agent harness has no Stop-hook equivalent, fall back to running `poll --watch` in the
+foreground as a first-class listening loop and keep it armed — but the Stop hook is strictly more
+reliable because it survives your turns going idle.
+
+Cheap manual signal if you ever want to check by hand: `npx nitpicker-harness pending --session nitpicker`
+→ `{ "pending": <count> }` (never drains).
 
 ## What `poll` returns and how to act on each item
 
