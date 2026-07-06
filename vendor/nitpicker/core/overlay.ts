@@ -3,7 +3,8 @@
 // (Next/React: ../react/dev-overlay.tsx). Public entry is Nitpicker.mount() in index.ts.
 import { CSS } from "./styles";
 import { Transport } from "./transport";
-import { captureRegion, rasterizeViewport, annotateRegion } from "./region";
+import { captureRegion, annotateRegion, buildFrozenClone, rasterizeFrozen } from "./region";
+import type { FrozenSnapshot } from "./region";
 import { baseDescriptor } from "./elements";
 import type { NitpickerHandle, NitpickerOptions, Mode, QueueItem, Rect, Viewport } from "./types";
 
@@ -84,8 +85,6 @@ export class Overlay implements NitpickerHandle {
   private outline!: HTMLElement;
   private elHighlight!: HTMLElement;
   private elLabel!: HTMLElement;
-  private snapshot!: HTMLElement;
-  private freezeCue!: HTMLElement;
   private freeze!: HTMLElement;
   private panel!: HTMLElement;
   private listEl!: HTMLElement;
@@ -95,17 +94,16 @@ export class Overlay implements NitpickerHandle {
 
   // drag state
   private dragStart: { x: number; y: number } | null = null;
-  // hotkey fast-path ONLY: viewport rasterized at key-press time so a hover-only element (tooltip/hover-
-  // card) is frozen into the snapshot the user then draws a box on. The dock path does NOT fill this — it
-  // rasters at Queue-commit (captureRegionShot) and leaves these null; see CLAUDE.md (two raster timings).
-  private frozenCanvas: HTMLCanvasElement | null = null;
-  // the in-flight raster, kicked at key-press by the hotkey path. captureFromFrozen awaits it so the crop
-  // always has the frozen canvas; usually already resolved by mouse-up → the card opens instantly.
-  private freezePromise: Promise<void> | null = null;
-  // cancels the pending (double-rAF-deferred) freeze raster if the user bails before it fires (Esc / mode
-  // switch / unmount). Without this a scheduled raster would fire on a torn-down overlay. Null once the
-  // raster has started (or was never scheduled).
-  private cancelFreeze: (() => void) | null = null;
+  // hotkey fast-path ONLY: a CHEAP DOM clone of the live viewport, built + attached synchronously at
+  // key-press (~one frame) so a hover-only element (tooltip/hover-card) is frozen before the cursor moves.
+  // Unlike the old path this does NOT rasterize here — the (~1–2s) html2canvas raster is deferred to
+  // drag-end and reads this clone. Null on the dock path (which draws on the live page and rasters at
+  // Queue-commit). Set at key-press; moved to an in-flight-raster local at drag-end. See region.ts.
+  private frozenSnapshot: FrozenSnapshot | null = null;
+  // The frozen clone's holder once a drag has committed it as the card's backdrop (drag-end → card close).
+  // Distinct from {@link frozenSnapshot} (the pre-drag drawing phase): removed on card close if no raster
+  // is consuming it, else by the raster's `.finally` (which needs it attached for html2canvas).
+  private frozenHolder: HTMLElement | null = null;
   // element-picker state
   private pickerOn = false;
   private prevBodyCursor: string | null = null;
@@ -172,24 +170,15 @@ export class Overlay implements NitpickerHandle {
     this.elLabel = el("div", "np-el-hl-label");
     this.elHighlight.appendChild(this.elLabel);
 
-    // snapshot layer: the hotkey fast-path paints its key-press-time viewport raster here so the drag
-    // happens over a frozen image (hover-only UI preserved). Kept BELOW the interaction layer so the
-    // dim bands + dashed outline still render on top of it while dragging.
-    this.snapshot = el("div", "np-snapshot");
-
-    // instant "freezing viewport…" cue for the hotkey path — shown synchronously on the keypress so it
-    // paints before the raster's main-thread block; hidden once the frozen snapshot lands (or on bail).
-    this.freezeCue = el("div", "np-freeze-cue", "Freezing viewport…");
-
-    // freeze layer (holds frozen canvas + queue card)
+    // freeze layer (holds the queue card / view-edit modal). The hotkey fast-path's frozen visual is a
+    // cheap DOM clone attached to the LIGHT DOM (so the page's own stylesheets re-apply to it) — not a
+    // shadow-DOM canvas — so it does not live here; see enterRegionFrozen / region.ts buildFrozenClone.
     this.freeze = el("div", "np-freeze");
 
     this.dock = this.buildDock();
     this.panel = this.buildPanel();
 
     rootEl.append(
-      this.snapshot,
-      this.freezeCue,
       this.interaction,
       this.elHighlight,
       this.freeze,
@@ -291,76 +280,27 @@ export class Overlay implements NitpickerHandle {
     }
   };
 
-  /** Hotkey fast-path into Region mode: arm the drag synchronously, then freeze the current viewport. */
+  /** Hotkey fast-path into Region mode: arm the drag AND freeze the viewport — both synchronously, in the
+   *  same keypress tick. The freeze is a CHEAP structural DOM clone ({@link buildFrozenClone}, ~one frame),
+   *  NOT an html2canvas raster: html2canvas is a single ~1–2s SYNCHRONOUS main-thread block (the cost is
+   *  DOM traversal + style computation, not pixel fill) that the old path ran at key-press, freezing the
+   *  whole viewport. The clone freezes hover-only UI (chart hover-cards, tooltips that vanish on
+   *  mouse-move) into a static visual the user boxes; the expensive raster is deferred to drag-end
+   *  ({@link captureFrozen}) and reads this clone, onto the same Queue-commit pipeline the dock path uses. */
   private enterRegionFrozen(): void {
     // A capture card is already open (mid-queue) — ignore the hotkey rather than clobber it.
     if (this.freeze.classList.contains("np-show")) return;
-    this.setMode("region"); // arm immediately so the mode reflects the keypress even before the raster
-    // Show the "freezing viewport…" cue synchronously (before scheduling the raster) so it paints on the
-    // next frame, ahead of the raster's main-thread block — the intrinsic ~1–2s freeze on a heavy DOM
-    // then reads as a deliberate step, not a hang. Hidden when the snapshot lands or the user bails.
-    this.freezeCue.classList.add("np-show");
-    // Kick the raster on a LATER frame, never inline on the keypress. rasterizeViewport → html2canvas is
-    // a single multi-hundred-ms (heavy DOM: ~1–2s) SYNCHRONOUS main-thread block that scale reduction
-    // does not shrink (the cost is DOM traversal + style computation, not pixel fill). Running it inline
-    // lands it in the keypress microtask, BEFORE the browser paints the armed mode UI — so the mode
-    // switch appears to stall for the whole raster. Deferring past a paint (double rAF) lets the armed UI
-    // render on the very next frame. We still fire within a couple frames — before the cursor can travel
-    // to start a drag — so the hover-only UI (tooltips/hover-cards) is still frozen into the snapshot.
-    this.freezePromise = this.scheduleFreeze();
-  }
-
-  /** Run {@link freezeViewport} after the mode-switch has had a frame to paint. Double rAF: the first
-   *  callback fires just before the frame that paints the armed UI; the second fires on the frame after
-   *  that, by which point the browser has committed the paint, so the raster's synchronous block no
-   *  longer gates the mode switch. Falls back to a macrotask where rAF is unavailable (jsdom/tests). The
-   *  pending schedule is stored in {@link cancelFreeze} so a bail-out (Esc/mode switch/unmount) before it
-   *  fires cancels it — otherwise the raster would run on a torn-down overlay. */
-  private scheduleFreeze(): Promise<void> {
-    // A prior schedule still pending (double hotkey press) — drop it so only the latest raster runs.
-    this.cancelFreeze?.();
-    return new Promise<void>((resolve) => {
-      const run = (): void => {
-        this.cancelFreeze = null;
-        void this.freezeViewport().then(resolve);
-      };
-      if (typeof requestAnimationFrame === "function") {
-        let inner = 0;
-        const outer = requestAnimationFrame(() => {
-          inner = requestAnimationFrame(run);
-        });
-        this.cancelFreeze = () => {
-          cancelAnimationFrame(outer);
-          cancelAnimationFrame(inner);
-        };
-      } else {
-        const t = setTimeout(run, 0);
-        this.cancelFreeze = () => clearTimeout(t);
-      }
-    });
-  }
-
-  /** Rasterize the live viewport and paint it into the snapshot layer, freezing the (hovered) view. Used
-   *  ONLY by the hotkey path — it must capture at key-press to preserve hover-only UI. The full viewport
-   *  is rasterized (the pane is `ignoreElements`-excluded and its gutter is cropped off the final blob);
-   *  the snapshot is shown at full width with the opaque docked pane sitting over the right gutter. */
-  private async freezeViewport(): Promise<void> {
+    // Drop any prior frozen clone still on screen (double hotkey press) before building a fresh one.
+    this.clearSnapshot();
+    this.setMode("region"); // arm immediately so the mode reflects the keypress
     try {
-      const { canvas } = await rasterizeViewport(this.scale, this.host);
-      // The user may have bailed (Esc / mode switch) or already completed a capture while html2canvas
-      // ran — don't resurrect the freeze on top of that.
-      if (this.mode !== "region" || this.freeze.classList.contains("np-show")) return;
-      this.frozenCanvas = canvas;
-      canvas.style.width = `${window.innerWidth}px`;
-      canvas.style.height = `${window.innerHeight}px`;
-      this.snapshot.innerHTML = "";
-      this.snapshot.appendChild(canvas);
-      this.snapshot.classList.add("np-show");
-      // Frozen view is now on screen — the "freezing…" step is done; the user draws over the snapshot.
-      this.freezeCue.classList.remove("np-show");
+      // Attaches the frozen clone to the light DOM at ~z just below the overlay; the drag bands/outline
+      // (shadow DOM, higher z) render on top of it. Laid out at appWidth so its geometry — and the red-box
+      // coordinate space — matches the live app.
+      this.frozenSnapshot = buildFrozenClone(this.host, this.appWidth());
     } catch (err) {
       console.error("nitpicker: region freeze failed", err);
-      this.clearSnapshot();
+      this.frozenSnapshot = null;
       this.setStatus(`capture failed: ${(err as Error).message}`);
     }
   }
@@ -373,7 +313,8 @@ export class Overlay implements NitpickerHandle {
     // Dock path: DO NOT rasterize here. The selection box is just an overlay rect drawn on the LIVE page,
     // so dragging is instant with no freeze. The screenshot is rasterized later, at Queue-commit time
     // (so a drag the user cancels never captures anything). The hotkey path is the exception — it froze
-    // the viewport at key-press (frozenCanvas set) to preserve hover-only UI.
+    // the viewport into a cheap DOM clone at key-press (frozenSnapshot set) to preserve hover-only UI, and
+    // the drag happens over that frozen clone.
     for (const b of this.bands) b.style.display = "block";
     this.outline.style.display = "block";
     this.updateDrag(e.clientX, e.clientY);
@@ -398,10 +339,10 @@ export class Overlay implements NitpickerHandle {
       this.setMode("cursor");
       return;
     }
-    if (this.frozenCanvas || this.freezePromise) {
-      // Hotkey path: annotate the key-press-time frozen canvas (never re-rasterize — the hover state is
-      // gone). The blob is ready by the time the card opens.
-      void this.captureFromFrozen(rect);
+    if (this.frozenSnapshot) {
+      // Hotkey path: DEFER the raster of the key-press-time frozen clone (never re-rasterize the live DOM —
+      // the hover state is gone) onto the same Queue-commit pipeline the dock path uses.
+      this.captureFrozen(rect);
     } else {
       // Dock path: open the queue card INSTANTLY over the live page (no freeze). The screenshot is
       // rasterized only if/when the user commits with Queue (enqueueRegion below), so a canceled drag
@@ -451,14 +392,13 @@ export class Overlay implements NitpickerHandle {
   }
 
   private clearSnapshot(): void {
-    // Kill any freeze raster still waiting on its deferral frames — the user bailed before it ran.
-    this.cancelFreeze?.();
-    this.cancelFreeze = null;
-    this.freezeCue.classList.remove("np-show");
-    this.snapshot.classList.remove("np-show");
-    this.snapshot.innerHTML = "";
-    this.frozenCanvas = null;
-    this.freezePromise = null;
+    // Tear down a not-yet-captured frozen clone (the user bailed before drawing). A clone whose raster is
+    // already in flight is NOT owned here — it lives on the raster promise (captureFrozenShot removes its
+    // holder in `.finally`), because html2canvas is still reading it.
+    if (this.frozenSnapshot) {
+      this.frozenSnapshot.holder.remove();
+      this.frozenSnapshot = null;
+    }
   }
 
   /** Dock path: rasterize + red-box the selection at Queue-commit time (viewport is unchanged since the
@@ -482,41 +422,50 @@ export class Overlay implements NitpickerHandle {
   }
 
   /**
-   * Hotkey path: annotate the key-press-time frozen canvas (never re-rasterized — the hover state is
-   * gone). If the raster is still in flight at mouse-up, await it first (usually already resolved).
+   * Hotkey path, on mouse-up: kick the DEFERRED raster of the key-press-time frozen clone and open the
+   * queue card over it — reusing the dock path's Queue-commit machinery (async raster → "capturing…"
+   * placeholder → blob attached before send). The frozen clone stays on screen as the backdrop while the
+   * raster runs, then {@link captureFrozenShot} tears it down. Mirrors the dock branch of onDragEnd but
+   * sources the screenshot from the clone (whose hover-only UI is frozen) instead of the live DOM.
    */
-  private async captureFromFrozen(rect: Rect): Promise<void> {
-    if (!this.frozenCanvas && this.freezePromise) {
-      // freezeViewport swallows its own errors (clears the snapshot + sets a status), so this never
-      // rejects — it just resolves with frozenCanvas still null, handled by the guard below.
-      await this.freezePromise;
-    }
-    const canvas = this.frozenCanvas;
-    if (!canvas) {
-      // Raster failed (freezeViewport already reported it) — just drop the drag UI.
+  private captureFrozen(rect: Rect): void {
+    const snapshot = this.frozenSnapshot;
+    this.frozenSnapshot = null; // leaves the drawing phase; the holder is now the card's backdrop
+    if (!snapshot) {
       this.clearDrag();
       return;
     }
-    try {
-      const { blob, thumb } = await annotateRegion(canvas, rect, this.scale, this.appWidth());
-      this.clearDrag();
-      // Promote the annotated snapshot canvas into the freeze layer + open the queue card. The frozen
-      // blob is already ready, so the item is enqueued complete (no "capturing…" placeholder needed).
-      canvas.style.width = `${window.innerWidth}px`;
-      canvas.style.height = `${window.innerHeight}px`;
-      this.freeze.innerHTML = "";
-      this.freeze.appendChild(canvas);
-      this.freeze.classList.add("np-show");
-      this.clearSnapshot();
-      this.openCard(rect, (text) =>
-        this.enqueueRegion(rect, Promise.resolve({ blob, thumb }), text),
-      );
-    } catch (err) {
-      console.error("nitpicker: region capture failed", err);
-      this.clearDrag();
-      this.clearSnapshot();
-      this.setStatus(`capture failed: ${(err as Error).message}`);
-    }
+    // Hand the holder to the card-backdrop lifecycle: removed on card close (Cancel/Esc) unless its raster
+    // is mid-flight, in which case the raster's `.finally` removes it. The frozen page stays visible (with
+    // its hover-only UI) behind the card while the user types.
+    this.frozenHolder = snapshot.holder;
+    this.clearDrag();
+    this.openCard(
+      rect,
+      (text) => this.enqueueRegion(rect, this.captureFrozenShot(snapshot, rect), text),
+      { backdrop: true },
+    );
+  }
+
+  /** Hotkey path: rasterize the frozen clone (deferred, off the key-press) and red-box the selection.
+   *  Holds the pane reflow-lock for the FULL raster (shared with the dock path via {@link pendingDockRasters})
+   *  and removes the frozen holder once html2canvas has consumed it — whether the raster succeeds or fails,
+   *  and whether or not the card is still open (html2canvas snapshots the holder synchronously, so removing
+   *  it on settle can't corrupt the result). */
+  private captureFrozenShot(
+    snapshot: FrozenSnapshot,
+    rect: Rect,
+  ): Promise<{ blob: Blob; thumb: string }> {
+    this.pendingDockRasters++;
+    return rasterizeFrozen(snapshot, this.scale)
+      .then(({ canvas }) => annotateRegion(canvas, rect, this.scale, this.appWidth()))
+      .finally(() => {
+        snapshot.holder.remove();
+        if (this.frozenHolder === snapshot.holder) this.frozenHolder = null;
+        this.pendingDockRasters--;
+        this.setPaneLocked(this.paneLocked());
+        this.maybeReconcileLayout();
+      });
   }
 
   /**
@@ -676,6 +625,12 @@ export class Overlay implements NitpickerHandle {
     // outlives the card, so the pane must LOOK locked or its toggle silently no-ops.
     this.setPaneLocked(this.pendingDockRasters > 0);
     this.clearSnapshot();
+    // Drop the hotkey freeze backdrop when its card closes — UNLESS a raster is still reading it (Queue
+    // path: captureFrozenShot removes it in `.finally`). On Cancel/Esc no raster runs, so remove it here.
+    if (this.frozenHolder && this.pendingDockRasters === 0) {
+      this.frozenHolder.remove();
+      this.frozenHolder = null;
+    }
     this.modalRegionBody = null;
     if (this.modalCleanup) {
       this.modalCleanup();
@@ -1030,6 +985,10 @@ export class Overlay implements NitpickerHandle {
     window.removeEventListener("resize", this.onResize);
     // tear down any open card/modal so its object URL (item screenshot) is revoked, not leaked
     this.unfreeze();
+    // remove any frozen-clone holder left in the light DOM — the not-yet-captured one (via unfreeze →
+    // clearSnapshot) plus any whose deferred raster is still in flight (belt-and-braces so none survive
+    // teardown; its raster's `.finally` .remove() is then a no-op).
+    document.querySelectorAll('[data-nitpicker="frozen"]').forEach((n) => n.remove());
     // release the reserved gutter — restore the host <html> inline styles exactly as we found them
     document.documentElement.style.marginRight = this.prevHtmlMarginRight;
     document.documentElement.style.transition = this.prevHtmlTransition;
