@@ -80,6 +80,10 @@ describe("shellPage", () => {
     expect(html).toContain('id="nh-chat"');
     expect(html).toContain('id="nh-queue"');
     expect(html).toContain('id="nh-send-btn"');
+    // Phase 2 — the interaction-mode toolbar the entry wires onto (cursor / region / element)
+    expect(html).toContain('id="nh-mode-cursor"');
+    expect(html).toContain('id="nh-mode-region"');
+    expect(html).toContain('id="nh-mode-element"');
   });
 
   it("escapes the session id so it cannot break out of the markup", () => {

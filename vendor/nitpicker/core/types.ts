@@ -1,4 +1,5 @@
 // @nitpicker/core — shared types. Framework-agnostic (no React). The wire schema mirrors the design's §8.2.
+import type { Env } from "./env";
 
 export type Mode = "cursor" | "region" | "element";
 
@@ -67,6 +68,9 @@ export interface NitpickerOptions {
   resolveElement?: (el: Element) => Partial<ElementDescriptor>;
   /** html2canvas scale; the red-box compositor uses the SAME value. Default = devicePixelRatio. */
   captureScale?: number;
+  /** DOM environment the engine reads/renders against (harness-local seam — see env.ts). Defaults to the
+   *  ambient document/window (injected mode). The builder shell passes the proxied iframe's env. */
+  env?: Env;
 }
 
 export interface NitpickerHandle {

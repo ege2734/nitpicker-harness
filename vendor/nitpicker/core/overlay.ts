@@ -6,6 +6,7 @@ import { Transport } from "./transport";
 import { captureRegion, annotateRegion, buildFrozenClone, rasterizeFrozen } from "./region";
 import type { FrozenSnapshot } from "./region";
 import { baseDescriptor } from "./elements";
+import { ambientEnv, type Env } from "./env";
 import type { NitpickerHandle, NitpickerOptions, Mode, QueueItem, Rect, Viewport } from "./types";
 
 // The docked feedback pane reserves this much width on the right; the host app reflows into the rest.
@@ -22,12 +23,15 @@ const ICONS: Record<string, string> = {
   chat: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H9l-5 4z" stroke-linejoin="round"/></svg>`,
 };
 
-function el<K extends keyof HTMLElementTagNameMap>(
+// Create an element in a specific document — the env's document, so the overlay's DOM is built in the
+// same document it renders into (ambient in injected mode). See {@link Overlay.el}.
+function createEl<K extends keyof HTMLElementTagNameMap>(
+  doc: Document,
   tag: K,
   cls?: string,
   html?: string,
 ): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
+  const node = doc.createElement(tag);
   if (cls) node.className = cls;
   if (html != null) node.innerHTML = html;
   return node;
@@ -37,10 +41,6 @@ function uuid(): string {
   return typeof crypto !== "undefined" && crypto.randomUUID
     ? crypto.randomUUID()
     : `np-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
-}
-
-function viewport(): Viewport {
-  return { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 };
 }
 
 /** Object URL for a blob, or null where the API is unavailable (e.g. jsdom) so callers can fall back. */
@@ -62,6 +62,9 @@ export class Overlay implements NitpickerHandle {
   private readonly root: ShadowRoot;
   private readonly transport: Transport;
   private readonly scale: number;
+  // The DOM environment the engine reads + renders against (see env.ts). Ambient in injected mode; the
+  // shell would pass the proxied iframe's env. All DOM-global access below routes through it (this.env).
+  private readonly env: Env;
 
   private mode: Mode = "cursor";
   private queue: QueueItem[] = [];
@@ -119,20 +122,21 @@ export class Overlay implements NitpickerHandle {
   private modalRegionBody: { id: string; wrap: HTMLElement } | null = null;
 
   constructor(private readonly opts: NitpickerOptions) {
-    this.scale = opts.captureScale ?? window.devicePixelRatio ?? 1;
+    this.env = opts.env ?? ambientEnv();
+    this.scale = opts.captureScale ?? this.env.win.devicePixelRatio ?? 1;
     this.transport = new Transport(opts.session, opts.endpoint ?? "http://127.0.0.1:5178");
     this.paneShown = this.readPaneShown();
 
-    const docEl = document.documentElement;
+    const docEl = this.env.doc.documentElement;
     this.prevHtmlMarginRight = docEl.style.marginRight;
     this.prevHtmlTransition = docEl.style.transition;
 
-    this.host = el("div");
+    this.host = this.el("div");
     this.host.setAttribute("data-nitpicker", "root");
     this.host.setAttribute("data-html2canvas-ignore", "true"); // never capture our own UI
     this.root = this.host.attachShadow({ mode: "open" });
-    this.root.appendChild(el("style", undefined, CSS));
-    document.body.appendChild(this.host);
+    this.root.appendChild(this.el("style", undefined, CSS));
+    this.env.doc.body.appendChild(this.host);
 
     this.build();
     // Reserve the pane's width on <html> so the host app renders in the remaining space, with a smooth
@@ -141,13 +145,28 @@ export class Overlay implements NitpickerHandle {
       .filter(Boolean)
       .join(", ");
     this.applyPaneLayout();
-    document.addEventListener("keydown", this.onKeydown, true);
-    window.addEventListener("resize", this.onResize);
+    this.env.doc.addEventListener("keydown", this.onKeydown, true);
+    this.env.win.addEventListener("resize", this.onResize);
+  }
+
+  /** Create an element in the env's document (so the overlay DOM lives in the document it renders into). */
+  private el<K extends keyof HTMLElementTagNameMap>(
+    tag: K,
+    cls?: string,
+    html?: string,
+  ): HTMLElementTagNameMap[K] {
+    return createEl(this.env.doc, tag, cls, html);
+  }
+
+  /** The env window's viewport (the surface the feedback is about). */
+  private viewport(): Viewport {
+    const w = this.env.win;
+    return { w: w.innerWidth, h: w.innerHeight, dpr: w.devicePixelRatio || 1 };
   }
 
   private readPaneShown(): boolean {
     try {
-      return window.localStorage.getItem(PANE_STORAGE_KEY) !== "0";
+      return this.env.win.localStorage.getItem(PANE_STORAGE_KEY) !== "0";
     } catch {
       return true; // storage blocked (private mode etc.) — default to shown
     }
@@ -155,25 +174,25 @@ export class Overlay implements NitpickerHandle {
 
   // ---- build DOM ----
   private build(): void {
-    const rootEl = el("div", "np-root");
+    const rootEl = this.el("div", "np-root");
 
     // interaction (region drag) layer + its dim bands + outline
-    this.interaction = el("div", "np-interaction");
-    this.bands = ["top", "bottom", "left", "right"].map(() => el("div", "np-band"));
-    this.outline = el("div", "np-outline");
+    this.interaction = this.el("div", "np-interaction");
+    this.bands = ["top", "bottom", "left", "right"].map(() => this.el("div", "np-band"));
+    this.outline = this.el("div", "np-outline");
     this.interaction.append(...this.bands, this.outline);
     this.interaction.addEventListener("mousedown", this.onDragStart);
 
     // element-picker highlight box (a separate overlay rect — we never mutate the host element's own
     // styles, so the app is never perturbed). Pointer-events:none so it can't eat clicks.
-    this.elHighlight = el("div", "np-el-hl");
-    this.elLabel = el("div", "np-el-hl-label");
+    this.elHighlight = this.el("div", "np-el-hl");
+    this.elLabel = this.el("div", "np-el-hl-label");
     this.elHighlight.appendChild(this.elLabel);
 
     // freeze layer (holds the queue card / view-edit modal). The hotkey fast-path's frozen visual is a
     // cheap DOM clone attached to the LIGHT DOM (so the page's own stylesheets re-apply to it) — not a
     // shadow-DOM canvas — so it does not live here; see enterRegionFrozen / region.ts buildFrozenClone.
-    this.freeze = el("div", "np-freeze");
+    this.freeze = this.el("div", "np-freeze");
 
     this.dock = this.buildDock();
     this.panel = this.buildPanel();
@@ -190,20 +209,20 @@ export class Overlay implements NitpickerHandle {
   }
 
   private buildDock(): HTMLElement {
-    const dock = el("div", "np-dock");
+    const dock = this.el("div", "np-dock");
     const mkModeBtn = (mode: Mode, title: string, disabled = false): HTMLButtonElement => {
-      const b = el("button", "np-btn", ICONS[mode]);
+      const b = this.el("button", "np-btn", ICONS[mode]);
       b.title = title;
       b.disabled = disabled;
-      if (disabled) b.appendChild(el("span", "np-soon", "soon"));
+      if (disabled) b.appendChild(this.el("span", "np-soon", "soon"));
       if (!disabled) b.addEventListener("click", () => this.setMode(mode));
       this.modeButtons.set(mode, b);
       return b;
     };
 
-    const chatBtn = el("button", "np-btn", ICONS.chat);
+    const chatBtn = this.el("button", "np-btn", ICONS.chat);
     chatBtn.title = "Feedback queue — show/hide the docked pane";
-    this.badgeEl = el("span", "np-badge");
+    this.badgeEl = this.el("span", "np-badge");
     chatBtn.appendChild(this.badgeEl);
     // The docked pane's own toggle can only HIDE it (it slides off with the pane); the dock button is the
     // always-visible affordance to bring it back, and carries the live queue-count badge.
@@ -213,37 +232,37 @@ export class Overlay implements NitpickerHandle {
       mkModeBtn("cursor", "Cursor — passive (Esc)"),
       mkModeBtn("region", "Region — drag to screenshot (⌘/Ctrl+Shift+X freezes hover-only UI)"),
       mkModeBtn("element", "Element — hover to outline, click to record"),
-      el("div", "np-sep"),
+      this.el("div", "np-sep"),
       chatBtn,
     );
     return dock;
   }
 
   private buildPanel(): HTMLElement {
-    const panel = el("div", "np-panel");
+    const panel = this.el("div", "np-panel");
 
-    const head = el("div", "np-panel-head");
+    const head = this.el("div", "np-panel-head");
     // Hide/show toggle at the TOP-LEFT of the pane. Clicking it collapses the pane (removes the reserved
     // width → the app expands to full width). Reopen from the dock's queue button.
-    const toggle = el("button", "np-pane-toggle", "⟩");
+    const toggle = this.el("button", "np-pane-toggle", "⟩");
     toggle.title = "Hide feedback pane";
     toggle.addEventListener("click", () => this.setPaneShown(false));
-    head.append(toggle, el("span", undefined, "nitpicker feedback"));
+    head.append(toggle, this.el("span", undefined, "nitpicker feedback"));
 
-    this.listEl = el("div", "np-list");
+    this.listEl = this.el("div", "np-list");
 
-    const foot = el("div", "np-panel-foot");
-    const ta = el("textarea");
+    const foot = this.el("div", "np-panel-foot");
+    const ta = this.el("textarea");
     ta.placeholder = "Add a message…";
-    const addBtn = el("button", "np-ghost", "Add message");
+    const addBtn = this.el("button", "np-ghost", "Add message");
     addBtn.addEventListener("click", () => {
       if (ta.value.trim()) {
         this.addMessage(ta.value.trim());
         ta.value = "";
       }
     });
-    this.statusEl = el("div", "np-status");
-    const sendBtn = el("button", "np-primary", "Send to agent");
+    this.statusEl = this.el("div", "np-status");
+    const sendBtn = this.el("button", "np-primary", "Send to agent");
     sendBtn.addEventListener("click", () => void this.send());
     foot.append(ta, addBtn, this.statusEl, sendBtn);
 
@@ -297,7 +316,7 @@ export class Overlay implements NitpickerHandle {
       // Attaches the frozen clone to the light DOM at ~z just below the overlay; the drag bands/outline
       // (shadow DOM, higher z) render on top of it. Laid out at appWidth so its geometry — and the red-box
       // coordinate space — matches the live app.
-      this.frozenSnapshot = buildFrozenClone(this.host, this.appWidth());
+      this.frozenSnapshot = buildFrozenClone(this.host, this.appWidth(), this.env);
     } catch (err) {
       console.error("nitpicker: region freeze failed", err);
       this.frozenSnapshot = null;
@@ -318,8 +337,8 @@ export class Overlay implements NitpickerHandle {
     for (const b of this.bands) b.style.display = "block";
     this.outline.style.display = "block";
     this.updateDrag(e.clientX, e.clientY);
-    window.addEventListener("mousemove", this.onDragMove);
-    window.addEventListener("mouseup", this.onDragEnd);
+    this.env.win.addEventListener("mousemove", this.onDragMove);
+    this.env.win.addEventListener("mouseup", this.onDragEnd);
   };
 
   private onDragMove = (e: MouseEvent): void => {
@@ -327,8 +346,8 @@ export class Overlay implements NitpickerHandle {
   };
 
   private onDragEnd = (e: MouseEvent): void => {
-    window.removeEventListener("mousemove", this.onDragMove);
-    window.removeEventListener("mouseup", this.onDragEnd);
+    this.env.win.removeEventListener("mousemove", this.onDragMove);
+    this.env.win.removeEventListener("mouseup", this.onDragEnd);
     if (!this.dragStart) return;
     // Clamp the selection to the app area so a box dragged toward the pane can't spill into its gutter.
     const rect = dragRect(this.dragStart.x, this.dragStart.y, this.clampX(e.clientX), e.clientY);
@@ -372,7 +391,7 @@ export class Overlay implements NitpickerHandle {
       b.style.height = `${Math.max(0, h)}px`;
     };
     const vw = this.appWidth();
-    const vh = window.innerHeight;
+    const vh = this.env.win.innerHeight;
     set(top, 0, 0, vw, r.y);
     set(bottom, 0, r.y + r.h, vw, vh - (r.y + r.h));
     set(left, 0, r.y, r.x, r.h);
@@ -412,7 +431,7 @@ export class Overlay implements NitpickerHandle {
    *  own appWidth reflow — which nitpicker itself introduces — is locked out. See AGENTS.md. */
   private captureRegionShot(rect: Rect): Promise<{ blob: Blob; thumb: string }> {
     this.pendingDockRasters++;
-    return captureRegion(rect, this.scale, this.host, this.appWidth())
+    return captureRegion(rect, this.scale, this.host, this.appWidth(), this.env)
       .then(({ blob, thumb }) => ({ blob, thumb }))
       .finally(() => {
         this.pendingDockRasters--;
@@ -462,7 +481,7 @@ export class Overlay implements NitpickerHandle {
     if (this.frozenHolder === snapshot.holder) this.frozenHolder = null;
     this.pendingDockRasters++;
     return rasterizeFrozen(snapshot, this.scale)
-      .then(({ canvas }) => annotateRegion(canvas, rect, this.scale, snapshot.viewport.w))
+      .then(({ canvas }) => annotateRegion(canvas, rect, this.scale, snapshot.viewport.w, this.env))
       .finally(() => {
         snapshot.holder.remove();
         this.pendingDockRasters--;
@@ -486,23 +505,23 @@ export class Overlay implements NitpickerHandle {
     const done = (): void => this.unfreeze();
 
     if (opts?.backdrop) {
-      const back = el("div", "np-backdrop");
+      const back = this.el("div", "np-backdrop");
       back.addEventListener("click", done);
       this.freeze.appendChild(back);
     }
 
-    const card = el("div", "np-card");
-    const ta = el("textarea");
+    const card = this.el("div", "np-card");
+    const ta = this.el("textarea");
     ta.placeholder = "What should change here?";
-    const actions = el("div", "np-actions");
-    const cancel = el("button", "np-ghost", "Cancel");
-    const queue = el("button", "np-primary", "Queue");
+    const actions = this.el("div", "np-actions");
+    const cancel = this.el("button", "np-ghost", "Cancel");
+    const queue = this.el("button", "np-primary", "Queue");
     actions.append(cancel, queue);
     card.append(ta, actions);
 
     // clamp near the anchor, inside the app area (so the card never lands under the docked pane)
     const left = Math.min(anchor.x, this.appWidth() - 296);
-    const top = Math.min(anchor.y + anchor.h + 8, window.innerHeight - 160);
+    const top = Math.min(anchor.y + anchor.h + 8, this.env.win.innerHeight - 160);
     card.style.left = `${Math.max(8, left)}px`;
     card.style.top = `${Math.max(8, top)}px`;
     this.freeze.appendChild(card);
@@ -526,21 +545,21 @@ export class Overlay implements NitpickerHandle {
     this.pickerOn = true;
     // capture phase: outline the element under the cursor before the app sees the event. Click is
     // intercepted so picking a button/link doesn't fire the app's handler.
-    document.addEventListener("mouseover", this.onElementOver, true);
-    document.addEventListener("mouseout", this.onElementOut, true);
-    document.addEventListener("click", this.onElementClick, true);
-    this.prevBodyCursor = document.body.style.cursor;
-    document.body.style.cursor = "crosshair";
+    this.env.doc.addEventListener("mouseover", this.onElementOver, true);
+    this.env.doc.addEventListener("mouseout", this.onElementOut, true);
+    this.env.doc.addEventListener("click", this.onElementClick, true);
+    this.prevBodyCursor = this.env.doc.body.style.cursor;
+    this.env.doc.body.style.cursor = "crosshair";
   }
 
   private disableElementPicker(): void {
     if (!this.pickerOn) return;
     this.pickerOn = false;
-    document.removeEventListener("mouseover", this.onElementOver, true);
-    document.removeEventListener("mouseout", this.onElementOut, true);
-    document.removeEventListener("click", this.onElementClick, true);
+    this.env.doc.removeEventListener("mouseover", this.onElementOver, true);
+    this.env.doc.removeEventListener("mouseout", this.onElementOut, true);
+    this.env.doc.removeEventListener("click", this.onElementClick, true);
     if (this.prevBodyCursor !== null) {
-      document.body.style.cursor = this.prevBodyCursor;
+      this.env.doc.body.style.cursor = this.prevBodyCursor;
       this.prevBodyCursor = null;
     }
     this.hideElHighlight();
@@ -655,20 +674,20 @@ export class Overlay implements NitpickerHandle {
     const item = this.queue.find((i) => i.id === id);
     if (!item || this.cardOpen()) return; // don't stack over an in-progress capture card
     this.freeze.innerHTML = "";
-    const back = el("div", "np-backdrop");
+    const back = this.el("div", "np-backdrop");
     back.addEventListener("click", () => this.unfreeze());
     this.freeze.appendChild(back);
 
-    const modal = el("div", "np-modal");
-    const head = el("div", "np-modal-head");
+    const modal = this.el("div", "np-modal");
+    const head = this.el("div", "np-modal-head");
     const title =
       item.kind === "region" ? "Region mark" : item.kind === "element" ? "Element mark" : "Message";
-    const close = el("button", "np-x", "✕");
+    const close = this.el("button", "np-x", "✕");
     close.addEventListener("click", () => this.unfreeze());
-    head.append(el("span", undefined, title), close);
+    head.append(this.el("span", undefined, title), close);
     modal.appendChild(head);
 
-    const bodyWrap = el("div", "np-modal-body");
+    const bodyWrap = this.el("div", "np-modal-body");
     if (item.kind === "region") {
       this.fillRegionBody(bodyWrap, item);
       this.modalRegionBody = { id: item.id, wrap: bodyWrap };
@@ -681,22 +700,22 @@ export class Overlay implements NitpickerHandle {
         d.testid && `testid: ${d.testid}`,
         d.tag && `tag: ${d.tag}`,
       ].filter(Boolean) as string[];
-      bodyWrap.appendChild(el("div", "np-modal-desc", lines.join("\n") || "(element)"));
+      bodyWrap.appendChild(this.el("div", "np-modal-desc", lines.join("\n") || "(element)"));
     }
     modal.appendChild(bodyWrap);
 
-    const ta = el("textarea");
+    const ta = this.el("textarea");
     ta.placeholder = "Message…";
     ta.value = item.text ?? "";
     modal.appendChild(ta);
 
-    const actions = el("div", "np-actions");
-    const remove = el("button", "np-ghost", "Remove");
+    const actions = this.el("div", "np-actions");
+    const remove = this.el("button", "np-ghost", "Remove");
     remove.addEventListener("click", () => {
       this.removeItem(item.id);
       this.unfreeze();
     });
-    const save = el("button", "np-primary", "Save");
+    const save = this.el("button", "np-primary", "Save");
     save.addEventListener("click", () => {
       item.text = ta.value.trim();
       this.renderQueue();
@@ -726,13 +745,13 @@ export class Overlay implements NitpickerHandle {
     const url = item._blob ? tryObjectURL(item._blob) : null;
     const src = url ?? item._thumb ?? null;
     if (src) {
-      const img = el("img", "np-modal-img");
+      const img = this.el("img", "np-modal-img");
       img.src = src;
       if (url) this.modalCleanup = () => URL.revokeObjectURL(url);
       wrap.appendChild(img);
     } else {
       wrap.appendChild(
-        el("div", "np-modal-note", item._error ? "Screenshot capture failed." : "Capturing screenshot…"),
+        this.el("div", "np-modal-note", item._error ? "Screenshot capture failed." : "Capturing screenshot…"),
       );
     }
   }
@@ -765,9 +784,9 @@ export class Overlay implements NitpickerHandle {
       id: uuid(),
       kind: "region",
       text,
-      pageUrl: location.href,
-      route: location.pathname,
-      viewport: viewport(),
+      pageUrl: this.env.win.location.href,
+      route: this.env.win.location.pathname,
+      viewport: this.viewport(),
       timestamp: new Date().toISOString(),
       image: { mime: "image/png", hasRedBox: true, selectionRect: rect },
     };
@@ -801,9 +820,9 @@ export class Overlay implements NitpickerHandle {
       id: uuid(),
       kind: "element",
       text,
-      pageUrl: location.href,
-      route: location.pathname,
-      viewport: viewport(),
+      pageUrl: this.env.win.location.href,
+      route: this.env.win.location.pathname,
+      viewport: this.viewport(),
       timestamp: new Date().toISOString(),
       element,
     });
@@ -818,9 +837,9 @@ export class Overlay implements NitpickerHandle {
       id: uuid(),
       kind: "message",
       text,
-      pageUrl: location.href,
-      route: location.pathname,
-      viewport: viewport(),
+      pageUrl: this.env.win.location.href,
+      route: this.env.win.location.pathname,
+      viewport: this.viewport(),
       timestamp: new Date().toISOString(),
     });
     this.renderQueue();
@@ -847,7 +866,7 @@ export class Overlay implements NitpickerHandle {
     this.listEl.innerHTML = "";
     if (n === 0) {
       this.listEl.appendChild(
-        el(
+        this.el(
           "div",
           "np-empty",
           "No feedback queued yet.\nUse Region to screenshot, Element to pick a component, or add a message below.",
@@ -856,36 +875,36 @@ export class Overlay implements NitpickerHandle {
       return;
     }
     for (const item of this.queue) {
-      const row = el("div", "np-item");
+      const row = this.el("div", "np-item");
       if (item.kind === "region") {
         if (item._thumb) {
-          const img = el("img");
+          const img = this.el("img");
           img.src = item._thumb;
           row.appendChild(img);
         } else {
           // raster still in flight (dock path rasterizes at Queue), or it failed
-          row.appendChild(el("div", "np-item-thumb-ph", item._error ? "✕" : "…"));
+          row.appendChild(this.el("div", "np-item-thumb-ph", item._error ? "✕" : "…"));
         }
       }
-      const body = el("div", "np-item-body");
-      body.appendChild(el("div", "np-item-kind", item.kind));
-      const textEl = el("div", "np-item-text");
+      const body = this.el("div", "np-item-body");
+      body.appendChild(this.el("div", "np-item-kind", item.kind));
+      const textEl = this.el("div", "np-item-text");
       textEl.textContent = item.text || "(no note)";
       body.appendChild(textEl);
       if (item.kind === "region" && !item._thumb) {
         body.appendChild(
-          el("div", "np-item-chip", item._error ? `capture failed` : "capturing…"),
+          this.el("div", "np-item-chip", item._error ? `capture failed` : "capturing…"),
         );
       }
       if (item.kind === "element" && item.element) {
         const chip = item.element.component ?? item.element.selector ?? "";
         if (chip) {
-          const chipEl = el("div", "np-item-chip");
+          const chipEl = this.el("div", "np-item-chip");
           chipEl.textContent = chip;
           body.appendChild(chipEl);
         }
       }
-      const x = el("button", "np-x", "✕");
+      const x = this.el("button", "np-x", "✕");
       x.addEventListener("click", (e) => {
         e.stopPropagation(); // don't also open the view/edit modal
         this.removeItem(item.id);
@@ -901,13 +920,13 @@ export class Overlay implements NitpickerHandle {
   /** Width reserved on the right for the docked pane — 0 when hidden, or on narrow viewports where the
    *  pane drops to a bottom sheet (media query) and reserving horizontal width would crush the app. */
   private reservedWidth(): number {
-    return this.paneShown && window.innerWidth > PANE_MIN_VIEWPORT ? PANE_W : 0;
+    return this.paneShown && this.env.win.innerWidth > PANE_MIN_VIEWPORT ? PANE_W : 0;
   }
 
   /** The app's rendered area width — the full viewport minus the pane's reserved gutter. Region capture
    *  and the drag selection are both confined to this so a screenshot never includes the pane. */
   private appWidth(): number {
-    return window.innerWidth - this.reservedWidth();
+    return this.env.win.innerWidth - this.reservedWidth();
   }
 
   private setPaneShown(shown: boolean): void {
@@ -917,7 +936,7 @@ export class Overlay implements NitpickerHandle {
     if (this.paneLocked()) return;
     this.paneShown = shown;
     try {
-      window.localStorage.setItem(PANE_STORAGE_KEY, shown ? "1" : "0");
+      this.env.win.localStorage.setItem(PANE_STORAGE_KEY, shown ? "1" : "0");
     } catch {
       /* storage blocked — state simply won't persist */
     }
@@ -934,7 +953,7 @@ export class Overlay implements NitpickerHandle {
     // width, but the dock still must lift above it (the narrow media-query `.np-dock.np-shift` rule).
     // Wide → left-shift over the app area; narrow → lift above the 70vh sheet.
     this.dock.classList.toggle("np-shift", this.paneShown);
-    document.documentElement.style.marginRight = reserve
+    this.env.doc.documentElement.style.marginRight = reserve
       ? `${reserve}px`
       : this.prevHtmlMarginRight;
     // keep the region drag layer (and its dim bands) out of the pane's gutter
@@ -985,19 +1004,19 @@ export class Overlay implements NitpickerHandle {
   // ---- teardown ----
   unmount(): void {
     this.unmounted = true;
-    document.removeEventListener("keydown", this.onKeydown, true);
-    window.removeEventListener("mousemove", this.onDragMove);
-    window.removeEventListener("mouseup", this.onDragEnd);
-    window.removeEventListener("resize", this.onResize);
+    this.env.doc.removeEventListener("keydown", this.onKeydown, true);
+    this.env.win.removeEventListener("mousemove", this.onDragMove);
+    this.env.win.removeEventListener("mouseup", this.onDragEnd);
+    this.env.win.removeEventListener("resize", this.onResize);
     // tear down any open card/modal so its object URL (item screenshot) is revoked, not leaked
     this.unfreeze();
     // remove any frozen-clone holder left in the light DOM — the not-yet-captured one (via unfreeze →
     // clearSnapshot) plus any whose deferred raster is still in flight (belt-and-braces so none survive
     // teardown; its raster's `.finally` .remove() is then a no-op).
-    document.querySelectorAll('[data-nitpicker="frozen"]').forEach((n) => n.remove());
+    this.env.doc.querySelectorAll('[data-nitpicker="frozen"]').forEach((n) => n.remove());
     // release the reserved gutter — restore the host <html> inline styles exactly as we found them
-    document.documentElement.style.marginRight = this.prevHtmlMarginRight;
-    document.documentElement.style.transition = this.prevHtmlTransition;
+    this.env.doc.documentElement.style.marginRight = this.prevHtmlMarginRight;
+    this.env.doc.documentElement.style.transition = this.prevHtmlTransition;
     this.disableElementPicker();
     this.host.remove();
   }

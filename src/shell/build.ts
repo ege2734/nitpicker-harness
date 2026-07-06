@@ -4,8 +4,10 @@
 // here and caches it in memory for the process lifetime (the source is static). Restart the harness after
 // editing the shell entry — a reload alone serves the stale cached bundle (same rule as the overlay).
 //
-// This bundle is small: Phase 1 reuses only vendor/nitpicker/core/{transport,types}.ts (chat + queue +
-// send-to-sidecar). No html2canvas / DOM-capture engine yet — those arrive in Phase 2.
+// Phase 1 reused only vendor/nitpicker/core/{transport,types}.ts (chat + queue + send). Phase 2 adds the
+// interactive layer, so this bundle now also pulls the engine primitives (core/region + elements +
+// react-source) and — via region.ts's dynamic import("html2canvas") — html2canvas, inlined into the IIFE
+// by esbuild exactly as the overlay bundle does. The bundle is larger but still fully self-contained.
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { build } from "esbuild";

@@ -45,9 +45,10 @@ Then:
    - *Alternative — builder-shell mode:* point the human at
      **http://127.0.0.1:4000/__nitpicker-harness/shell** instead (the ready banner advertises both). The
      shell embeds the app in a same-origin iframe and keeps the chat + queue in a parent side-panel, so
-     the queue **survives any in-iframe navigation** (SPA route change, reload, cross-origin excursion).
-     Phase 1 supports chat + **Send to agent** only (no region/element yet); it drains via the same
-     `poll`.
+     the queue **survives any in-iframe navigation** (SPA route change, reload, cross-origin excursion). A
+     mode toolbar drives the full interactive layer from the parent — drag a **Region** for a screenshot
+     or pick an **Element** for its component/selector, both read out of the iframe; it drains via the
+     same `poll`.
 3. **Drain the feedback** whenever the driver tells you to (or manually):
 
    ```bash
