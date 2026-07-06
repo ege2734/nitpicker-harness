@@ -153,7 +153,7 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   `ShellChrome`'s existing Phase-1 queue + `Transport` (region `_pending`/`_blob` awaited on send, same as the
   overlay). Mounting the full `Overlay` in the shell would double the chat/dock and fight the shell's flex layout;
   the shell drives the parameterized engine primitives directly instead.
-- **Browser E2E needs Node ≥20.19** for `chrome-devtools-axi` (its `chrome-devtools-mcp` bridge). The repo's
+- **Browser E2E needs Node ≥20.19** for the `chrome-devtools-mcp` bridge. The repo's
   default `node` may be older; `export PATH="$HOME/.nvm/versions/node/v22.*/bin:$PATH"` before driving the browser.
   The `tests/fixtures/next16-app` (`PricingCard` → `[data-testid="pricing-Pro"]`) is the standard target: run it on
   `:3111`, point the harness at it, open `/__nitpicker-harness/shell`.
@@ -161,7 +161,7 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
 ## The feedback driver (idle agent → still gets driven)
 
 `poll`/`poll --watch` only delivers while the agent is actively running it. So feedback that lands after
-a turn ends would sit undriven. The driver closes that gap with the firstmate "blocking watcher +
+a turn ends would sit undriven. The driver closes that gap with the "blocking watcher +
 turn-end trigger" shape:
 
 - The sidecar queue is already **durable** (`store.drain` clears only on actual delivery), so a mark
