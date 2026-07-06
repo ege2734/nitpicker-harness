@@ -198,8 +198,11 @@ function isFullyTransparent(bg: string): boolean {
 
 /** Replace each `<canvas>` in the clone with an `<img>` of its current pixels (`cloneNode` blanks canvases
  *  and html2canvas re-clones internally, so an in-place pixel copy is lost). Cross-origin-tainted canvases
- *  throw on `toDataURL` and are left blank — the same limit html2canvas has. Returns a promise that settles
- *  once the replacement images decode. Live↔clone canvases match by document order (cloneNode preserves it). */
+ *  throw on `toDataURL` and are left blank — the same limit html2canvas has. The `<img>` intrinsic size stays
+ *  the backing-store pixels, but the DISPLAYED box is pinned to the live canvas's rendered rect so a canvas
+ *  sized by CSS class/stylesheet (whose rules no longer match an `<img>`) isn't drawn at its raw bitmap size.
+ *  Returns a promise that settles once the replacement images decode. Live↔clone canvases match by document
+ *  order (cloneNode preserves it). */
 function freezeCanvases(clone: HTMLElement): Promise<unknown> {
   const live = Array.from(document.body.querySelectorAll("canvas"));
   const cloned = Array.from(clone.querySelectorAll("canvas"));
@@ -212,6 +215,9 @@ function freezeCanvases(clone: HTMLElement): Promise<unknown> {
       img.height = live[i].height;
       const style = cloned[i].getAttribute("style");
       if (style) img.setAttribute("style", style);
+      const rect = live[i].getBoundingClientRect();
+      img.style.width = `${rect.width}px`;
+      img.style.height = `${rect.height}px`;
       img.src = url;
       cloned[i].replaceWith(img);
       decodes.push(img.decode().catch(() => undefined));
@@ -388,8 +394,9 @@ export async function annotateRegion(
 /**
  * Capture the current viewport, burn in the gray-dim + red box around `selCss`, drop the docked pane's
  * gutter, and return the annotated canvas + a PNG blob. Used by the dock path, which rasterizes at
- * Queue-commit time; the hotkey path instead calls {@link rasterizeViewport} at key-press and
- * {@link annotateRegion} on mouse-up. `appWidth` is the host app's rendered width (viewport − pane).
+ * Queue-commit time; the hotkey path instead builds a cheap DOM clone via {@link buildFrozenClone} at
+ * key-press and defers the raster to Queue-commit via {@link rasterizeFrozen} + {@link annotateRegion}.
+ * `appWidth` is the host app's rendered width (viewport − pane).
  */
 export async function captureRegion(
   selCss: Rect,
