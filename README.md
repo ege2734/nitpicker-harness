@@ -56,9 +56,10 @@ The harness fronts your app in two ways, advertised side by side in the ready ba
   harness origin that embeds your app in a same-origin `<iframe src="/">` and hosts the chat + queue in
   the **parent** window. Because the chrome lives outside the app frame, the queue **survives any
   in-iframe navigation** — SPA route change, hard reload, even a cross-origin excursion — with zero extra
-  code. A mode toolbar drives the full interactive layer from the parent: **region** drag → screenshot
-  and **element** pick → component/selector, both read out of the same-origin iframe and rendered over it.
-  Both modes POST to the same sidecar, so `poll` drains either.
+  code. A mode toolbar drives the full interactive layer from the parent: **region** drag → screenshot,
+  **element** pick → component/selector, and **edit** → inline click-to-edit text (Enter saves, Esc
+  cancels), all read out of the same-origin iframe and rendered over it. Both modes POST to the same
+  sidecar, so `poll` drains either.
 
 ### Keep the agent driven
 
