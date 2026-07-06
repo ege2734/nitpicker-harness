@@ -4,7 +4,7 @@
 // `file:line` provenance — the runtime read is covered by vendor/nitpicker/tests/react-source.test.ts.
 // The loader is bundler-agnostic (the SAME .cjs is wired under Turbopack `turbopack.rules` and webpack
 // `module.rules`), so exercising it with a faked loader context proves both paths' stamping.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -14,6 +14,9 @@ const babel = require("@babel/core") as {
 };
 const plugin = require("../vendor/nitpicker/next/nitpicker-source-plugin.cjs");
 const loader = require("../vendor/nitpicker/next/nitpicker-source-loader.cjs");
+const withNitpickerSource = require("../vendor/nitpicker/next/with-nitpicker-source.cjs") as {
+  (config?: Record<string, unknown>): Record<string, unknown>;
+};
 
 const ROOT = "/app";
 
@@ -96,5 +99,57 @@ describe("nitpicker-source-loader (bundler-agnostic wrapper)", () => {
     const { code, err } = await runLoader(src, `${ROOT}/app/util.ts`);
     expect(err).toBeNull();
     expect(code).toBe(src);
+  });
+});
+
+describe("withNitpickerSource (default one-line config wrapper)", () => {
+  const NODE_ENV = process.env.NODE_ENV;
+  afterEach(() => {
+    if (NODE_ENV === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = NODE_ENV;
+  });
+
+  it("wires the loader into turbopack.rules AND a webpack fallback in dev", () => {
+    process.env.NODE_ENV = "development";
+    const out = withNitpickerSource({}) as {
+      turbopack: { rules: Record<string, { loaders: string[] }> };
+      webpack: (c: { module: { rules: unknown[] } }, ctx: unknown) => { module: { rules: unknown[] } };
+    };
+    // Both globs point at the SAME bundler-agnostic loader.cjs.
+    expect(out.turbopack.rules["*.tsx"].loaders[0]).toMatch(/nitpicker-source-loader\.cjs$/);
+    expect(out.turbopack.rules["*.jsx"].loaders[0]).toBe(out.turbopack.rules["*.tsx"].loaders[0]);
+    const wc = { module: { rules: [] as unknown[] } };
+    out.webpack(wc, {});
+    expect(wc.module.rules).toHaveLength(1);
+  });
+
+  it("returns the config UNTOUCHED in production (the stamp never ships)", () => {
+    process.env.NODE_ENV = "production";
+    const config = { reactStrictMode: true };
+    expect(withNitpickerSource(config)).toBe(config);
+  });
+
+  it("composes with — never clobbers — an existing turbopack config and webpack fn", () => {
+    process.env.NODE_ENV = "development";
+    let chained = false;
+    const out = withNitpickerSource({
+      turbopack: { root: "/pinned", rules: { "*.svg": { loaders: ["svg-loader"] } } },
+      webpack: (c: { module: { rules: unknown[] } }) => {
+        chained = true;
+        return c;
+      },
+    }) as {
+      turbopack: { root: string; rules: Record<string, unknown> };
+      webpack: (c: { module: { rules: unknown[] } }, ctx: unknown) => void;
+    };
+    // Existing turbopack keys survive alongside the injected globs.
+    expect(out.turbopack.root).toBe("/pinned");
+    expect(out.turbopack.rules["*.svg"]).toEqual({ loaders: ["svg-loader"] });
+    expect(out.turbopack.rules["*.tsx"]).toBeTruthy();
+    // The app's own webpack() still runs, then our rule is appended.
+    const wc = { module: { rules: [] as unknown[] } };
+    out.webpack(wc, {});
+    expect(chained).toBe(true);
+    expect(wc.module.rules).toHaveLength(1);
   });
 });
