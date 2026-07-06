@@ -9,7 +9,15 @@
 //     through the harness, and (via relaxSecurityHeaders) strip framing headers + relax CSP
 //   • proxy the HMR WebSocket (upgrade requests) so hot-reload survives
 //   • serve the bundled overlay JS at `/__nitpicker-harness/overlay.js`
-import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type Server,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
+import { request as httpsRequest } from "node:https";
+import type { Duplex } from "node:stream";
 import httpProxy from "http-proxy";
 import { buildOverlay } from "../overlay/build";
 import {
@@ -56,9 +64,11 @@ export function startHarness(opts: HarnessOptions): Promise<Harness> {
     changeOrigin: true,
     // We rewrite HTML bodies ourselves, so http-proxy hands us the raw upstream response.
     selfHandleResponse: true,
-    ws: true,
+    // WebSocket upgrades are handled by forwardUpgrade() below, NOT http-proxy's ws pass — see the
+    // note on server.on("upgrade"). So `ws` stays off here.
     xfwd: true,
   });
+  const targetUrl = new URL(opts.target);
 
   // Ask the target for identity encoding so we can inject into a plain-text HTML body without having to
   // gunzip/re-gzip. Dev servers rarely compress, but this makes it deterministic.
@@ -149,9 +159,111 @@ export function startHarness(opts: HarnessOptions): Promise<Harness> {
   });
 
   // HMR / any target WebSocket: forward the upgrade so hot-reload survives the proxy.
+  //
+  // We do NOT use http-proxy's `proxy.ws()` here. http-proxy@1.18.1's WebSocket pass leaves the outgoing
+  // client-request's HTTP parser attached to the upgraded socket; the first inbound WebSocket frame is
+  // then fed to that parser, which throws `Parse Error: Expected HTTP/` and tears the socket down *before*
+  // the 101 handshake is relayed to the browser. Against Next 16 / Turbopack that manifests as the browser
+  // console error "WebSocket connection to '…/_next/webpack-hmr' failed: Connection closed before receiving
+  // a handshake response", and — critically — the stalled dev socket wedges Turbopack's runtime so client
+  // hydration never completes and per-node React fibers never attach (breaking element→component name).
+  // (This worked on Next 15 / webpack by luck of timing; Turbopack's HMR runtime hard-depends on the socket.)
+  //
+  // forwardUpgrade() below is a plain raw-socket tunnel: open the same upgrade request to the target, relay
+  // its 101 + headers back verbatim, then pipe bytes both ways with no HTTP parser in the middle.
   server.on("upgrade", (req, socket, head) => {
-    proxy.ws(req, socket, head);
+    forwardUpgrade(req, socket as Duplex, head);
   });
+
+  /** Forward a WebSocket (or any) HTTP upgrade to the target and tunnel the raw socket both ways. */
+  function forwardUpgrade(req: IncomingMessage, clientSocket: Duplex, head: Buffer): void {
+    const requestFn = targetUrl.protocol === "https:" ? httpsRequest : httpRequest;
+    // Mirror the web proxy's changeOrigin: rewrite Host to the target so the dev server sees its own origin.
+    const headers = { ...req.headers, host: targetUrl.host };
+    // Next 16 / Turbopack's dev server rejects the `/_next/webpack-hmr` upgrade with a raw "Unauthorized"
+    // (not even a valid HTTP response — that's the `Parse Error: Expected HTTP/` upstream) whenever the
+    // request carries an `Origin` outside its dev-origin allowlist. The browser always sends the *harness*
+    // origin (e.g. http://127.0.0.1:4222), which never matches the target — and even the target's own
+    // 127.0.0.1 origin is rejected (only `localhost`/LAN hosts are allowlisted by default). A forwarded
+    // reverse-proxy upgrade is a trusted server-to-server hop, so strip `Origin` entirely: with no Origin
+    // the dev server treats it as same-origin and returns `101 Switching Protocols`. Without this the HMR
+    // socket never connects and Turbopack's runtime stalls before client hydration attaches per-node React
+    // fibers (breaking element→component-name resolution). Verified: any Origin → "Unauthorized"; none → 101.
+    delete headers.origin;
+    const proxyReq = requestFn({
+      protocol: targetUrl.protocol,
+      hostname: targetUrl.hostname,
+      port: targetUrl.port,
+      method: req.method,
+      path: req.url,
+      headers,
+    });
+
+    // Couple the client socket to the upstream request *before* the handshake completes. pipe() attaches no
+    // error handler, so a mid-tunnel drop would otherwise crash the process — and, more subtly, a browser
+    // disconnect during the handshake window (after end(), before the target emits 'upgrade'/'response') would
+    // orphan proxyReq: the later 'upgrade' callback still fires, creates proxySocket, and its close-coupling
+    // registers too late to ever run — leaking the upstream fd (common under Turbopack HMR reconnect churn).
+    // Destroying proxyReq up front aborts the in-flight request so that 'upgrade' never fires in that case.
+    // Idempotent, so it composes with the post-handshake proxySocket<->clientSocket coupling below.
+    let torn = false;
+    const teardown = () => {
+      if (torn) return;
+      torn = true;
+      proxyReq.destroy();
+      clientSocket.destroy();
+    };
+    clientSocket.on("error", teardown);
+    clientSocket.on("close", teardown);
+
+    proxyReq.on("upgrade", (proxyRes, proxySocket: Duplex, proxyHead: Buffer) => {
+      // If the client already went away during the handshake, don't leave the freshly-created upstream
+      // socket dangling — the up-front close-coupling can't retroactively catch a close that already fired.
+      if (clientSocket.destroyed) return void proxySocket.destroy();
+      // Tie the two sockets' lifetimes together — HMR reconnects often, so a half-open peer left behind on
+      // every drop would slowly leak file descriptors over a long dev session.
+      proxySocket.on("error", () => clientSocket.destroy());
+      proxySocket.on("close", () => clientSocket.destroy());
+      clientSocket.on("close", () => proxySocket.destroy());
+      // Relay the target's handshake response (e.g. `101 Switching Protocols` + Sec-WebSocket-Accept)
+      // byte-for-byte, then splice the two sockets. rawHeaders preserves order/casing/duplicates.
+      const statusLine = `HTTP/1.1 ${proxyRes.statusCode} ${proxyRes.statusMessage}`;
+      const headerLines: string[] = [];
+      for (let i = 0; i < proxyRes.rawHeaders.length; i += 2) {
+        headerLines.push(`${proxyRes.rawHeaders[i]}: ${proxyRes.rawHeaders[i + 1]}`);
+      }
+      clientSocket.write(`${statusLine}\r\n${headerLines.join("\r\n")}\r\n\r\n`);
+      // Early bytes that arrived alongside each handshake, in their correct direction.
+      if (proxyHead && proxyHead.length) clientSocket.write(proxyHead); // target → browser
+      if (head && head.length) proxySocket.write(head); // browser → target
+      proxySocket.pipe(clientSocket);
+      clientSocket.pipe(proxySocket);
+    });
+
+    // The target answered without upgrading (e.g. 404/426). Relay the status line + headers so the browser
+    // sees the real rejection instead of a bare socket close, then end the tunnel.
+    proxyReq.on("response", (proxyRes) => {
+      if (proxyRes.headers.upgrade) return; // handled by the 'upgrade' listener above
+      const statusLine = `HTTP/1.1 ${proxyRes.statusCode} ${proxyRes.statusMessage}`;
+      const headerLines: string[] = [];
+      for (let i = 0; i < proxyRes.rawHeaders.length; i += 2) {
+        headerLines.push(`${proxyRes.rawHeaders[i]}: ${proxyRes.rawHeaders[i + 1]}`);
+      }
+      clientSocket.write(`${statusLine}\r\n${headerLines.join("\r\n")}\r\n\r\n`);
+      // pipe() attaches no error handler to the source; an upstream body error/abort mid-stream would
+      // otherwise emit an unhandled 'error' on proxyRes and crash the harness. Tear the tunnel down instead.
+      proxyRes.on("error", () => clientSocket.destroy());
+      proxyRes.on("aborted", () => clientSocket.destroy());
+      proxyRes.pipe(clientSocket);
+    });
+
+    proxyReq.on("error", (err) => {
+      log(`[nitpicker-harness] ws upgrade error: ${err.message}`);
+      clientSocket.destroy();
+    });
+
+    proxyReq.end();
+  }
 
   return new Promise<Harness>((resolve) => {
     server.listen(opts.port, host, () => {

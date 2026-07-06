@@ -54,6 +54,33 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   `--sidecar-port` (and matching `--endpoint`) to isolate; `--no-sidecar` to reuse an external one.
 - To avoid gzip handling on the injection path, the proxy sends `accept-encoding: identity` upstream and
   resets `content-length`/`transfer-encoding`/`content-encoding` on the rewritten HTML.
+- **WebSocket (HMR) upgrades are hand-rolled, NOT `proxy.ws`.** `http-proxy@1.18.1`'s ws pass leaves its
+  outgoing HTTP parser attached to the upgraded socket and throws `Parse Error: Expected HTTP/` on the
+  first inbound WebSocket frame, tearing the socket down before the 101 reaches the browser. `server.ts`
+  `forwardUpgrade` replaces it with a raw-socket tunnel (open the same upgrade upstream, relay the 101 +
+  headers verbatim, then pipe bytes both ways with no parser in the middle). `ws` is off in the
+  `createProxyServer` opts. If you ever route ws back through http-proxy, this regresses.
+- **The proxy strips `Origin` on forwarded upgrades — load-bearing for Next 16 / Turbopack HMR.** Turbopack's
+  dev server rejects the `/_next/webpack-hmr` upgrade with a raw non-HTTP `Unauthorized` (that's the
+  `Parse Error` upstream) whenever `Origin` is present and outside its dev-origin allowlist. The browser
+  always sends the *harness* origin, which never matches — and even the target's own `127.0.0.1` origin is
+  rejected (only `localhost`/LAN hosts are allowlisted by default; `127.0.0.1` is not). A reverse-proxy hop
+  is a trusted server-to-server request, so `forwardUpgrade` does `delete headers.origin` before forwarding;
+  with no Origin the dev server returns 101. **This is the whole Phase-0 hydration fix:** without the HMR
+  socket, Turbopack's runtime stalls before client hydration attaches per-node `__reactFiber$…`, so the
+  fiber walk (hence `component` name) returns nothing *through the proxy* while it works served-direct.
+  Regression-guarded by `tests/proxy-ws.test.ts`; manual A/B rig is `tests/fixtures/next16-app` (its README).
+- **Injecting the overlay makes the app log a *recoverable* React hydration mismatch on `<html>`.** The
+  overlay sets `documentElement.style.transition` on mount (`vendor/nitpicker/core/overlay.ts`), which the
+  hydrating tree doesn't expect. React 19 recovers (fibers still attach, verified), but the dev error
+  overlay pops and then 403s on `/__nextjs_original-stack-frames` + `/__nextjs_font/*` (same Turbopack
+  cross-origin-dev-resource gate, HTTP side). Pre-existing to the injected overlay, orthogonal to the
+  proxy; only became *visible* once Phase 0 let hydration actually run. A proper fix belongs with the
+  overlay-engine lift (report Phase 2), not the proxy.
+- **`tests/fixtures/**` is excluded from the root `tsconfig`.** The fixture is a separate Next app whose
+  own `@types/node` globally augments `process.env.NODE_ENV` to read-only; if `tsc` pulls its
+  `next-env.d.ts`/`.next/**` in via `tests/**/*.ts`, that augmentation leaks and breaks the vendored
+  `NODE_ENV=` test assignments program-wide. Keep the exclude.
 
 ## The feedback driver (idle agent → still gets driven)
 

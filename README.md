@@ -81,7 +81,8 @@ nitpicker-harness shutdown [--endpoint <url>]
 
 - **`src/proxy/`** — the reverse proxy. `inject.ts` is the pure HTML/header rewriting (unit-tested);
   `server.ts` wires it into an [`http-proxy`](https://github.com/http-party/node-http-proxy) instance
-  with streaming HTML injection + WebSocket forwarding.
+  for HTML injection, plus a hand-rolled raw-socket tunnel for the HMR WebSocket upgrade (http-proxy's
+  own `ws` pass is off — see [`AGENTS.md`](./AGENTS.md)).
 - **`src/overlay/`** — the browser entry that calls `Nitpicker.mount()` from the reused core, bundled by
   esbuild into a single self-contained IIFE served to the proxied page (config rides on the script
   URL's query string, so no inline script is needed).
@@ -100,7 +101,7 @@ which also brings prod-safety gates. The harness's sweet spot is *no target chan
 
 ## Status: Phase 1 (localhost dev proxy) — done vs. deferred
 
-**Done & verified** (against a live Next.js 15 / React 19 dev app):
+**Done & verified** (against live Next.js 15 / webpack and Next.js 16 / Turbopack, React 19 dev apps):
 
 - ✅ Reverse proxy fronts the dev server under the harness origin; app renders identically.
 - ✅ Overlay injected into streamed HTML same-origin; dock appears.
@@ -109,7 +110,8 @@ which also brings prod-safety gates. The harness's sweet spot is *no target chan
 - ✅ Region + element + message batch drained by the `poll` CLI over the session-keyed sidecar.
 - ✅ Feedback **drives** an idle agent: a turn-end Stop hook parks on the sidecar's non-draining `/wait`
   at zero token cost and re-invokes the agent the instant a mark lands (durable queue → never lost).
-- ✅ HMR WebSocket forwarded — editing the source hot-reloads the proxied page, overlay intact.
+- ✅ HMR WebSocket forwarded (raw-socket tunnel; `Origin` stripped so Turbopack's dev-origin gate
+  returns `101`) — editing the source hot-reloads the proxied page, overlay intact.
 - ✅ `X-Frame-Options` stripped, CSP `frame-ancestors` dropped + `script-src`/`connect-src`/`style-src` relaxed.
 
 **Deferred (follow-ups, not blockers):**
