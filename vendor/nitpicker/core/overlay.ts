@@ -473,9 +473,10 @@ export class Overlay implements NitpickerHandle {
 
   /**
    * The shared "queue a message" card (one card, reused by both region and element). Anchored under
-   * `anchor`, clamped into the viewport, hosted on the freeze layer. Region supplies its own opaque
-   * canvas backdrop; element mode gets a transparent click-catching backdrop so app clicks behind the
-   * card don't leak while it's open.
+   * `anchor`, clamped into the viewport, hosted on the freeze layer. Both region and element callers pass
+   * `{ backdrop: true }`, so the card gets the same transparent click-catching `np-backdrop` — app clicks
+   * behind the card don't leak while it's open (the region path's frozen visual is now the light-DOM clone,
+   * not a promoted opaque canvas).
    */
   private openCard(
     anchor: Rect,

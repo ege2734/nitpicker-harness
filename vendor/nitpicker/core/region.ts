@@ -129,9 +129,14 @@ export function buildFrozenClone(hostEl: Element, appWidthCss: number = window.i
     `[data-nitpicker="frozen"] *,[data-nitpicker="frozen"] *::before,[data-nitpicker="frozen"] *::after` +
     `{animation-play-state:paused!important;transition:none!important;caret-color:transparent!important;}`;
   holder.appendChild(pause);
+  // `pointer-events:auto` makes the holder a click barrier for its whole lifetime: whenever the frozen
+  // snapshot is shown it swallows clicks so they can't reach the invisible live page behind it — including
+  // the post-Queue raster window after the card + its np-backdrop are gone. While the card is open (or a
+  // drag is armed) the shadow-DOM layers sit above this holder (z 2147483647 > 2147483000) and still get
+  // those interactions first; the holder only catches clicks once those higher layers are removed.
   holder.style.cssText =
     `position:fixed;left:0;top:0;width:${viewport.w}px;height:${viewport.h}px;overflow:hidden;` +
-    `margin:0;padding:0;border:0;pointer-events:none;z-index:2147483000;` +
+    `margin:0;padding:0;border:0;pointer-events:auto;z-index:2147483000;` +
     `background:${frozenBackdrop()};`;
   // A native-scroll container replays the page scroll offset without a transform (a transform would break
   // fixed/sticky positioning inside the clone). The clone is laid out at appWidth so its geometry matches
