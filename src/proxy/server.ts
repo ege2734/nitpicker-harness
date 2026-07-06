@@ -177,9 +177,6 @@ export function startHarness(opts: HarnessOptions): Promise<Harness> {
 
   /** Forward a WebSocket (or any) HTTP upgrade to the target and tunnel the raw socket both ways. */
   function forwardUpgrade(req: IncomingMessage, clientSocket: Duplex, head: Buffer): void {
-    // pipe() attaches no error handler to either end; a mid-tunnel drop would otherwise crash the process.
-    clientSocket.on("error", () => clientSocket.destroy());
-
     const requestFn = targetUrl.protocol === "https:" ? httpsRequest : httpRequest;
     // Mirror the web proxy's changeOrigin: rewrite Host to the target so the dev server sees its own origin.
     const headers = { ...req.headers, host: targetUrl.host };
@@ -202,7 +199,27 @@ export function startHarness(opts: HarnessOptions): Promise<Harness> {
       headers,
     });
 
+    // Couple the client socket to the upstream request *before* the handshake completes. pipe() attaches no
+    // error handler, so a mid-tunnel drop would otherwise crash the process — and, more subtly, a browser
+    // disconnect during the handshake window (after end(), before the target emits 'upgrade'/'response') would
+    // orphan proxyReq: the later 'upgrade' callback still fires, creates proxySocket, and its close-coupling
+    // registers too late to ever run — leaking the upstream fd (common under Turbopack HMR reconnect churn).
+    // Destroying proxyReq up front aborts the in-flight request so that 'upgrade' never fires in that case.
+    // Idempotent, so it composes with the post-handshake proxySocket<->clientSocket coupling below.
+    let torn = false;
+    const teardown = () => {
+      if (torn) return;
+      torn = true;
+      proxyReq.destroy();
+      clientSocket.destroy();
+    };
+    clientSocket.on("error", teardown);
+    clientSocket.on("close", teardown);
+
     proxyReq.on("upgrade", (proxyRes, proxySocket: Duplex, proxyHead: Buffer) => {
+      // If the client already went away during the handshake, don't leave the freshly-created upstream
+      // socket dangling — the up-front close-coupling can't retroactively catch a close that already fired.
+      if (clientSocket.destroyed) return void proxySocket.destroy();
       // Tie the two sockets' lifetimes together — HMR reconnects often, so a half-open peer left behind on
       // every drop would slowly leak file descriptors over a long dev session.
       proxySocket.on("error", () => clientSocket.destroy());
