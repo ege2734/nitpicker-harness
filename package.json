@@ -1,7 +1,7 @@
 {
   "name": "nitpicker-harness",
   "version": "0.1.0",
-  "description": "Standalone same-origin proxy harness for nitpicker: point it at a running web app and get the full in-app feedback overlay — region screenshots, element→component/selector, chat/queue → sidecar — with zero nitpicker code in the target's repo.",
+  "description": "Standalone same-origin proxy harness: point it at a running web app and get the full in-app feedback overlay — region screenshots, element→component/selector/source, chat/queue → sidecar — with zero overlay code in the target's repo.",
   "license": "MIT",
   "repository": {
     "type": "git",
