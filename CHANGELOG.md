@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Open-source governance: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue/PR templates,
   Dependabot config, and CI/license badges in the README.
 
+### Fixed
+- **Region freeze no longer shifts the page** — `Overlay.appWidth()` now measures
+  `documentElement.clientWidth` (viewport minus a classic scrollbar's gutter) instead of
+  `window.innerWidth`, so the frozen-region clone lays out at the live content width. Only visible with
+  classic (non-overlay) scrollbars; a no-op under 0-width overlay scrollbars.
+- **Region selection visual persists while composing** — the dim bands + red outline now stay on screen
+  after mouse-up until the queue card is committed or dismissed, so the framed region stays visible.
+
 ## [0.1.0]
 
 Phase 1 — localhost dev proxy, Next.js reference target.

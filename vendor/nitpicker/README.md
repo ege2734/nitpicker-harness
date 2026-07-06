@@ -57,6 +57,14 @@ it is **not** upstreamed — preserve it on every re-sync (do NOT blind-copy `re
   schema-light so `server/` only widens the `kind` union (items pass through opaquely); `cli/poll.ts` renders
   the mark for the agent (source, `old → new`, component, selector). Additive and injected-mode-neutral (the
   injected overlay never emits this kind). Preserve on re-sync (same rule as the deltas above).
+- **`core/overlay.ts` — two injected-mode region-UX fixes.** (1) `appWidth()` reads a cached
+  `documentElement.clientWidth` (`viewportContentW`, refreshed only at mount/resize/drag-start/freeze-entry)
+  instead of `window.innerWidth`, so the frozen-region clone lays out at the live content width and doesn't
+  shift the page on freeze under a classic scrollbar (falls back to `innerWidth` when clientWidth is 0, so
+  jsdom + overlay-scrollbar browsers are behavior-identical). (2) `onDragEnd`/`captureFrozen` no longer
+  `clearDrag()`, leaving the dim bands + red outline as a persistent selection visual while the card is open;
+  `unfreeze()` is the single teardown point that clears it. Injected-mode only (the builder shell has its own
+  drag path). Covered by `tests/region-persist.test.ts`. Preserve on re-sync (same rule as the deltas above).
 - **`core/env.ts` (new) + the `Env` seam through `core/overlay.ts` + `core/region.ts`** — the overlay
   engine was written against the ambient `document`/`window` globals. The builder shell (`src/shell`) needs
   the SAME engine to read a DIFFERENT document — the same-origin proxied `<iframe>`'s
