@@ -43,25 +43,9 @@ export const CSS = `
   white-space: nowrap; text-overflow: ellipsis; background: #3b5bdb; color: #fff; font-size: 10px;
   font-family: ui-monospace, monospace; line-height: 16px; padding: 0 5px; border-radius: 3px; }
 
-/* ---- hotkey freeze snapshot (below the interaction layer so bands/outline draw on top) ---- */
-.np-snapshot { position: fixed; inset: 0; pointer-events: none; display: none; }
-.np-snapshot.np-show { display: block; }
-.np-snapshot canvas { position: fixed; top: 0; left: 0; }
-
-/* Instant "freezing viewport…" cue shown on the ⌘/Ctrl+Shift+X keypress. It paints on the very next
-   frame — before the (~1–2s on a heavy DOM) html2canvas raster's synchronous block — so that intrinsic
-   wait reads as an intentional "freezing" step, not a broken/janky UI. Hidden the moment the frozen
-   snapshot lands (or the user bails). Pointer-events:none so it never eats the drag. */
-.np-freeze-cue { position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
-  display: none; align-items: center; gap: 7px; pointer-events: none; z-index: 2;
-  background: rgba(20,20,26,.92); color: #e6e6ea; font-size: 12px; line-height: 1;
-  padding: 7px 12px; border-radius: 999px; border: 1px solid #34343c;
-  box-shadow: 0 4px 16px rgba(0,0,0,.45); }
-.np-freeze-cue.np-show { display: flex; }
-.np-freeze-cue::before { content: ""; width: 11px; height: 11px; border-radius: 50%;
-  border: 2px solid rgba(255,255,255,.28); border-top-color: #ff3b30;
-  animation: np-cue-spin .7s linear infinite; }
-@keyframes np-cue-spin { to { transform: rotate(360deg); } }
+/* The hotkey (⌘/Ctrl+Shift+X) freeze visual is a cheap DOM clone attached to the LIGHT DOM (so the page's
+   own stylesheets re-apply to it) at z-index just below this overlay — see region.ts buildFrozenClone. It
+   needs no shadow-DOM styles here; the drag bands/outline (higher z) render on top of it. */
 
 /* ---- freeze layer + queue card ---- */
 .np-freeze { position: fixed; inset: 0; pointer-events: none; display: none; }
