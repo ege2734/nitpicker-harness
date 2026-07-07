@@ -14,6 +14,7 @@
 // library (src/index.ts); this CLI is a thin wrapper over it.
 import type { ChildProcess } from "node:child_process";
 import { get, request } from "node:http";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { startHarness } from "./proxy/server";
 import { startSidecar } from "./sidecar";
@@ -39,6 +40,7 @@ function usage(): void {
     `nitpicker-harness — point at a running dev server and mark up feedback for your AI agent.\n\n` +
       `  nitpicker-harness <path-to-app> [--dev-cmd "<cmd>"] [--target-port <n>] [--port <n>]\n` +
       `                                  [--session <id>] [--agent claude|claude-cli] [--no-agent]\n` +
+      `                                  [--system-prompt <file>]\n` +
       `  nitpicker-harness --target <url> [--port <n>] [--session <id>] [--sidecar-port <n>] [--no-sidecar]\n` +
       `  nitpicker-harness poll --session <id> [--endpoint <url>] [--watch]\n` +
       `  nitpicker-harness stop-hook --session <id> [--endpoint <url>] [--timeoutMs <n>]\n` +
@@ -48,6 +50,8 @@ function usage(): void {
       `Embedded mode (a bare path): the harness owns the app's dev server and the side pane IS a live agent.\n` +
       `  An explicit --dev-cmd MUST bind the injected $PORT (e.g. "uvicorn app:app --reload --port $PORT"),\n` +
       `  or pass --target-port matching the port the command binds, else readiness detection times out.\n` +
+      `  The agent runs the Loom builder persona by default; override with --system-prompt <file> or the\n` +
+      `  NITPICKER_HARNESS_SYSTEM_PROMPT env var.\n` +
       `Target mode (--target): point at an already-running server; mark up with the dock / builder shell.\n`,
   );
 }
@@ -136,6 +140,20 @@ async function serveEmbedded(args: string[], appPathArg: string): Promise<void> 
   const noSidecar = has(args, "no-sidecar");
   const agentName = flag(args, "agent") || "claude";
   const token = flag(args, "agent-token");
+  // `--system-prompt <file>` overrides the built-in Loom builder persona; its contents win over the
+  // NITPICKER_HARNESS_SYSTEM_PROMPT env var and the default (resolveSystemPrompt handles precedence).
+  const systemPromptFile = flag(args, "system-prompt");
+  let systemContext: string | undefined;
+  if (systemPromptFile) {
+    try {
+      systemContext = readFileSync(resolve(systemPromptFile), "utf8");
+    } catch (err) {
+      process.stderr.write(
+        `nitpicker-harness: cannot read --system-prompt file ${systemPromptFile}: ${(err as Error).message}\n`,
+      );
+      process.exit(1);
+    }
+  }
 
   const agent = noAgent ? undefined : makeBackend(agentName, { model });
   const auth = token ? bearerAuth(token) : undefined;
@@ -150,6 +168,7 @@ async function serveEmbedded(args: string[], appPathArg: string): Promise<void> 
     devCommand,
     targetPort,
     model,
+    systemContext,
     noAgent,
     agent,
     auth,

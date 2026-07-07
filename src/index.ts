@@ -13,6 +13,7 @@ import { startSidecar } from "./sidecar";
 import { LocalAppRuntime, type AppRuntime } from "./app/runtime";
 import { makeBackend, type AgentBackend, type AgentSession, type AgentAuth } from "./agent/backend";
 import { AgentGateway, type GatewayAuth } from "./agent/gateway";
+import { resolveSystemPrompt } from "./agent/system-prompt";
 
 // ---- public interface surface (re-exports) ----
 export { startHarness } from "./proxy/server";
@@ -49,6 +50,7 @@ export {
   type AgentGatewayOptions,
 } from "./agent/gateway";
 export { formatTurn, formatMark, type FormattedTurn } from "./agent/format";
+export { LOOM_BUILDER_SYSTEM_PROMPT, SYSTEM_PROMPT_ENV, resolveSystemPrompt } from "./agent/system-prompt";
 
 export interface EmbeddedBuilderOptions {
   /** The app repo path — the runtime spawns its dev server here and the agent edits here. */
@@ -79,6 +81,9 @@ export interface EmbeddedBuilderOptions {
   targetPort?: number;
   /** Model + system framing for the agent. */
   model?: string;
+  /** Override the builder-agent system prompt. Precedence (highest first): this value → the
+   *  `NITPICKER_HARNESS_SYSTEM_PROMPT` env var → the built-in `LOOM_BUILDER_SYSTEM_PROMPT` default. Loom,
+   *  which does NOT set this, gets the shared default persona automatically. */
   systemContext?: string;
   /** Escape hatch: own the dev server but point the pane at the classic sidecar/poll sink (no agent). Keeps
    *  the door open for pocketwatcher-style external drivers from a path. */
@@ -112,6 +117,9 @@ export async function startEmbeddedBuilder(opts: EmbeddedBuilderOptions): Promis
   const log = opts.log ?? (() => {});
   const sidecarPort = opts.sidecarPort ?? 5178;
   const endpoint = opts.sidecarEndpoint ?? `http://127.0.0.1:${sidecarPort}`;
+  // Every embedded session runs the Loom builder persona unless the caller overrides it (env fallback in
+  // between). Resolved ONCE here so the eager primary session and the gateway's lazy sessions agree.
+  const systemContext = resolveSystemPrompt(opts.systemContext);
 
   const runtime =
     opts.runtime ??
@@ -137,7 +145,7 @@ export async function startEmbeddedBuilder(opts: EmbeddedBuilderOptions): Promis
     gateway = new AgentGateway(backend, {
       cwd: opts.appPath,
       auth: opts.auth,
-      systemContext: opts.systemContext,
+      systemContext,
       model: opts.model,
       log,
     });
@@ -145,7 +153,7 @@ export async function startEmbeddedBuilder(opts: EmbeddedBuilderOptions): Promis
     session = await backend.startSession({
       cwd: opts.appPath,
       sessionId: opts.sessionId,
-      systemContext: opts.systemContext,
+      systemContext,
       model: opts.model,
       auth: opts.agentAuth,
     });
