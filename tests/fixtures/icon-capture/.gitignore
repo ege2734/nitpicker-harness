@@ -1,0 +1,5 @@
+# built probe bundle + transient capture outputs
+probe.js
+*.png
+cap-*.txt
+capture-*.txt

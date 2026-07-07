@@ -85,10 +85,18 @@ it is **not** upstreamed — preserve it on every re-sync (do NOT blind-copy `re
   switched with no call-site change. The two tests that mock the module (`tests/hotkey.test.ts`,
   `tests/env-seam.test.ts`) mock `html2canvas-pro`; `cli/verify.ts`'s `html2canvas` prod-leak MARKER still
   matches (the fork's bundle retains the `html2canvas` substring). Preserve on re-sync.
-- **`core/region.ts` — `ensureFontsReady()` webfont pre-warm before every capture.** `rasterizeViewport`
-  and `rasterizeFrozen` now `await ensureFontsReady(doc)` before calling html2canvas: it forces every
-  declared `@font-face` to `.load()` then awaits the `FontFaceSet` `.ready`. Without it a self-hosted icon
-  webfont (e.g. `@loom/ds`'s Phosphor font) that hasn't finished loading at capture time rasterizes as the
-  missing-glyph tofu box (□) for every icon — html2canvas embeds the same-origin `@font-face` but paints
-  before the glyphs resolve. Generic (no font-name hardcoding); best-effort (a missing/partial FontFaceSet,
-  e.g. jsdom, is skipped). Covered by `tests/region-fonts.test.ts`. Preserve on re-sync.
+- **`core/region.ts` — icon-font capture fix (`ensureFontsReady` + `embedFontsForCapture`).** Region
+  screenshots rasterized self-hosted icon webfonts (e.g. `@loom/ds`'s Phosphor font, PUA glyphs) as the
+  missing-glyph tofu box (□) for every icon while the live app was fine. Two parts, both before every
+  html2canvas call in `rasterizeViewport`/`rasterizeFrozen`: (1) `ensureFontsReady(doc)` force-loads the
+  declared `@font-face`s and awaits the `FontFaceSet` `.ready` (necessary but NOT sufficient); (2)
+  **`embedFontsForCapture(sourceDoc, baseHref, targetDoc)`** — the real fix. html2canvas draws text with the
+  **AMBIENT** document's fonts, but the builder/shell path rasterizes a **different** document (the proxied
+  iframe via the `Env` seam), so the iframe's icon `@font-face` is absent from the drawing document → tofu.
+  It reads the SOURCE doc's `@font-face` rules (`collectFontFaceSpecs`), fetches the bytes (same-origin under
+  the proxy), and `FontFace`-loads them into the DRAWING document (`hostEl.ownerDocument`) before capture,
+  removing them after. Generic (no font-name hardcoding); best-effort (cross-origin/un-fetchable fonts and a
+  missing `FontFace`/`fetch`/jsdom are skipped). Root cause found + fix **visually verified** with a real
+  browser loop — see `tests/fixtures/icon-capture/` (synthetic PUA icon font + iframe repro). Guarded by
+  `tests/region-fonts.test.ts` + `tests/region-fontembed.test.ts` (the cross-document embedding). Preserve on
+  re-sync.

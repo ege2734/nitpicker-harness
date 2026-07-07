@@ -26,6 +26,111 @@ async function ensureFontsReady(doc: Document | null | undefined): Promise<void>
   }
 }
 
+interface FontFaceSpec {
+  family: string;
+  weight: string;
+  style: string;
+  url: string; // absolute
+}
+
+/**
+ * The icon-font capture fix. html2canvas draws text with the AMBIENT document's fonts, but the builder/shell
+ * path rasterizes a DIFFERENT document (the proxied iframe, via the Env seam) — so a self-hosted icon webfont
+ * declared only in the iframe (e.g. @loom/ds's Phosphor font) is absent from the drawing document and every
+ * glyph rasterizes as the missing-glyph tofu box (□). Awaiting fonts.ready doesn't help (the font IS loaded,
+ * just in the wrong document). So we read the source document's @font-face rules, fetch the font bytes
+ * (same-origin under the proxy), and LOAD them as real FontFace objects into the drawing document BEFORE
+ * html2canvas rasterizes — then remove them afterwards. Best-effort: cross-origin stylesheets (unreadable
+ * cssRules) and un-fetchable fonts are skipped.
+ *
+ * `sourceDoc` is where the @font-face rules live (env.doc); `targetDoc` is where html2canvas draws (the
+ * ambient document). Returns a cleanup that removes the added faces. No-op without FontFace / fetch.
+ */
+export async function embedFontsForCapture(
+  sourceDoc: Document,
+  baseHref: string,
+  targetDoc: Document,
+): Promise<() => void> {
+  const noop = (): void => undefined;
+  try {
+    if (typeof FontFace === "undefined" || typeof fetch === "undefined" || !targetDoc.fonts) return noop;
+    const specs = collectFontFaceSpecs(sourceDoc, baseHref);
+    if (!specs.length) return noop;
+    const added: FontFace[] = [];
+    await Promise.all(
+      specs.map(async (spec) => {
+        try {
+          const buf = await (await fetch(spec.url, { credentials: "same-origin" })).arrayBuffer();
+          const ff = new FontFace(spec.family, buf, { weight: spec.weight, style: spec.style });
+          await ff.load();
+          targetDoc.fonts.add(ff);
+          added.push(ff);
+        } catch {
+          /* skip a font we can't fetch/parse */
+        }
+      }),
+    );
+    return () => {
+      for (const ff of added) {
+        try {
+          targetDoc.fonts.delete(ff);
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+  } catch {
+    return noop;
+  }
+}
+
+/** Read @font-face rules (family/weight/style + first non-data url, made absolute) from a document. */
+export function collectFontFaceSpecs(doc: Document, baseHref: string): FontFaceSpec[] {
+  const rules: CSSFontFaceRule[] = [];
+  const walk = (list: CSSRuleList | undefined): void => {
+    if (!list) return;
+    for (const rule of Array.from(list)) {
+      // CSSRule.FONT_FACE_RULE === 5; @media (4) / @supports (12) may nest @font-face.
+      if (rule.type === 5) rules.push(rule as CSSFontFaceRule);
+      else if ("cssRules" in rule) walk((rule as CSSGroupingRule).cssRules);
+    }
+  };
+  for (const sheet of Array.from(doc.styleSheets)) {
+    try {
+      walk(sheet.cssRules);
+    } catch {
+      /* cross-origin stylesheet — cssRules throws; skip */
+    }
+  }
+
+  const seen = new Set<string>();
+  const specs: FontFaceSpec[] = [];
+  for (const face of rules) {
+    const src = face.style.getPropertyValue("src");
+    const family = face.style.getPropertyValue("font-family").replace(/^["']|["']$/g, "");
+    if (!src || !family) continue;
+    const url = [...src.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/g)]
+      .map((m) => m[1])
+      .find((u) => !u.startsWith("data:"));
+    if (!url) continue;
+    let abs: string;
+    try {
+      abs = new URL(url, baseHref).href;
+    } catch {
+      continue;
+    }
+    if (seen.has(abs)) continue;
+    seen.add(abs);
+    specs.push({
+      family,
+      weight: face.style.getPropertyValue("font-weight") || "normal",
+      style: face.style.getPropertyValue("font-style") || "normal",
+      url: abs,
+    });
+  }
+  return specs;
+}
+
 export interface CaptureResult {
   blob: Blob;
   /** the composited frozen canvas, shown on top to freeze the view. */
@@ -67,26 +172,38 @@ export async function rasterizeViewport(
   const { default: html2canvas } = await import("html2canvas-pro");
   const { doc, win } = env;
   const viewport = { w: win.innerWidth, h: win.innerHeight };
-  // Ensure self-hosted webfonts (e.g. @loom/ds's Phosphor icon font) are fully loaded BEFORE rasterizing —
-  // html2canvas embeds same-origin @font-face rules into its clone, but if the glyphs haven't resolved yet it
-  // captures the missing-glyph tofu box (□) for every icon. See ensureFontsReady.
+  // Ensure self-hosted webfonts (e.g. @loom/ds's Phosphor icon font) are fully loaded BEFORE rasterizing,
+  // then inline them as data-URI @font-face for the clone. Loading alone is NOT enough: html2canvas embeds
+  // fonts from the AMBIENT document's stylesheets, but here we rasterize a DIFFERENT document (the proxied
+  // iframe via the Env seam), so the iframe's icon @font-face is never embedded and every glyph tofus (□).
+  // collectFontFaceCss reads the RIGHT document's faces and hands them to the clone via onclone. See the fn.
   await ensureFontsReady(doc);
+  // html2canvas draws with the AMBIENT document's fonts; load the source doc's webfaces into it first (see
+  // embedFontsForCapture). `hostEl.ownerDocument` is the document html2canvas runs in (the parent/builder pane
+  // in cross-document mode, the app doc in injected mode); fall back to the ambient global `document`.
+  const drawDoc = hostEl.ownerDocument ?? (typeof document !== "undefined" ? document : doc);
+  const releaseFonts = await embedFontsForCapture(doc, win.location?.href ?? "", drawDoc);
 
-  const canvas = await html2canvas(doc.body, {
-    x: win.scrollX,
-    y: win.scrollY,
-    width: viewport.w,
-    height: viewport.h,
-    scale,
-    useCORS: true,
-    backgroundColor: null,
-    logging: false,
-    // Exclude our overlay UI from the raster. The shadow host also carries data-html2canvas-ignore as
-    // a belt-and-braces guard; a hotkey freeze holder (should never co-occur with a dock raster) is
-    // skipped too so it can never bleed into a dock screenshot.
-    ignoreElements: (el) =>
-      el === hostEl || (el as HTMLElement).dataset?.nitpicker === "frozen",
-  });
+  let canvas: HTMLCanvasElement;
+  try {
+    canvas = await html2canvas(doc.body, {
+      x: win.scrollX,
+      y: win.scrollY,
+      width: viewport.w,
+      height: viewport.h,
+      scale,
+      useCORS: true,
+      backgroundColor: null,
+      logging: false,
+      // Exclude our overlay UI from the raster. The shadow host also carries data-html2canvas-ignore as
+      // a belt-and-braces guard; a hotkey freeze holder (should never co-occur with a dock raster) is
+      // skipped too so it can never bleed into a dock screenshot.
+      ignoreElements: (el) =>
+        el === hostEl || (el as HTMLElement).dataset?.nitpicker === "frozen",
+    });
+  } finally {
+    releaseFonts();
+  }
 
   const warning = checkCaptureScale(canvas, viewport, scale);
   if (warning) console.warn(warning);
@@ -207,17 +324,24 @@ export async function rasterizeFrozen(snapshot: FrozenSnapshot, scale: number): 
   const { default: html2canvas } = await import("html2canvas-pro");
   await snapshot.decode; // ensure canvas→img replacements have decoded before we paint
   const { holder, viewport } = snapshot;
-  await ensureFontsReady(holder.ownerDocument); // icon-font glyphs must be loaded or they tofu (see above)
-  const canvas = await html2canvas(holder, {
-    x: 0,
-    y: 0,
-    width: viewport.w,
-    height: viewport.h,
-    scale,
-    useCORS: true,
-    backgroundColor: null,
-    logging: false,
-  });
+  const fdoc = holder.ownerDocument;
+  await ensureFontsReady(fdoc); // icon-font glyphs must be loaded or they tofu (see above)
+  const releaseFonts = await embedFontsForCapture(fdoc, fdoc.defaultView?.location?.href ?? "", fdoc);
+  let canvas: HTMLCanvasElement;
+  try {
+    canvas = await html2canvas(holder, {
+      x: 0,
+      y: 0,
+      width: viewport.w,
+      height: viewport.h,
+      scale,
+      useCORS: true,
+      backgroundColor: null,
+      logging: false,
+    });
+  } finally {
+    releaseFonts();
+  }
 
   const warning = checkCaptureScale(canvas, viewport, scale);
   if (warning) console.warn(warning);

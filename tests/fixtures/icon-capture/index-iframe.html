@@ -1,0 +1,8 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8" />
+<title>icon-capture repro (iframe / harness cross-document)</title>
+<style>*{box-sizing:border-box}html,body{margin:0;height:100%}#frame{width:900px;height:260px;border:0}</style>
+</head><body>
+  <!-- Parent has NO icon @font-face. The icon font lives ONLY in the iframe's document — like the harness. -->
+  <iframe id="frame" src="/index.html"></iframe>
+  <script src="./probe.js"></script>
+</body></html>

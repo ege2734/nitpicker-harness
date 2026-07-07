@@ -80,14 +80,31 @@ describe("renderMarkdownInto", () => {
     expect(root.textContent).toContain("**bol");
   });
 
-  it("renders blockquotes and paragraphs with soft line breaks", () => {
+  it("renders blockquotes; a SOFT line break becomes a space (keeps inter-word spacing)", () => {
     md("> quoted line\n\nline one\nline two");
     expect(root.querySelector("blockquote")!.textContent).toContain("quoted line");
     const p = root.querySelectorAll("p");
     const last = p[p.length - 1];
-    expect(last.querySelector("br")).not.toBeNull();
-    expect(last.textContent).toContain("line one");
-    expect(last.textContent).toContain("line two");
+    // soft break → space, NOT <br> (so "one" and "two" don't collide)
+    expect(last.querySelector("br")).toBeNull();
+    expect(last.textContent).toBe("line one line two");
+  });
+
+  it("keeps the space when a sentence is soft-wrapped after a period (regression)", () => {
+    md("the header was wired.\nCSS then took over.");
+    // must be "wired. CSS", never "wired.CSS"
+    expect(root.textContent).toBe("the header was wired. CSS then took over.");
+    expect(root.textContent).not.toContain("wired.CSS");
+  });
+
+  it("preserves normal inter-word / inter-sentence spaces on a single line", () => {
+    md("One thing. Another thing. Third.");
+    expect(root.querySelector("p")!.textContent).toBe("One thing. Another thing. Third.");
+  });
+
+  it("honors an explicit HARD break (two trailing spaces) as <br>", () => {
+    md("line one.  \nline two");
+    expect(root.querySelector("p")!.querySelector("br")).not.toBeNull();
   });
 
   it("clears prior content on re-render (streaming replaces, not appends)", () => {

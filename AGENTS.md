@@ -182,8 +182,21 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
     createElement/textContent (never innerHTML) + scheme-checked links, so agent output can't inject HTML/XSS;
     it's STREAM-SAFE (re-parses the accumulated string per token, coalesced to one paint/frame via rAF;
     unterminated fences / half-typed `**bold` degrade gracefully) and dependency-light (no new deps). Emphasis
-    is `*`-only (never `_`) so `file_line_col` paths aren't mangled. `.nh-md` styles live in `builderPage()`;
+    is `*`-only (never `_`) so `file_line_col` paths aren't mangled, and a **soft** line break (single wrapped
+    newline) renders as a SPACE, not `<br>` (else "wired.\nCSS" → "wired.CSS", dropping the inter-word space);
+    a hard break (two trailing spaces / backslash) is still `<br>`. `.nh-md` styles live in `builderPage()`;
     `tests/markdown.test.ts`. User messages stay plain. Classic shell chat unchanged.
+  - **Region-capture icon fonts (tofu-box fix) — the html2canvas cross-document trap.** Region screenshots
+    rasterized self-hosted icon webfonts (e.g. `@loom/ds`'s Phosphor font) as tofu boxes (□) even though the
+    live app was fine. html2canvas draws text with the **ambient** document's fonts, but the builder/shell
+    path rasterizes a **different** document (the proxied iframe via the `Env` seam) — so the iframe's icon
+    `@font-face` is absent from the drawing document. `await document.fonts.ready` is necessary but NOT
+    sufficient (the font is loaded — in the WRONG document). `vendor/nitpicker/core/region.ts`
+    `embedFontsForCapture` reads the source doc's `@font-face` rules, fetches the bytes (same-origin under the
+    proxy), and `FontFace`-loads them into the drawing doc (`hostEl.ownerDocument`) before capturing. **Found +
+    fixed via a real browser loop** (Playwright + a synthetic PUA icon font + an iframe repro) — see
+    `tests/fixtures/icon-capture/`; DON'T iterate this blind on unit tests alone (a same-document unit test
+    passes while the cross-document case tofus). Guarded by `vendor/nitpicker/tests/region-fontembed.test.ts`.
   - **Overlay-suppression is MODE-gated (no double UI):** the embedded builder pane drives element-pick /
     region / inline-edit from the PARENT against its iframe (the reused `InteractionLayer`/`Env` seam), so
     injecting the classic in-frame overlay dock+queue would be a redundant SECOND feedback UI over the same

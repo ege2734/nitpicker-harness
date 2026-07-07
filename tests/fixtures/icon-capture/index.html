@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>icon-capture repro</title>
+<style>
+  /* Self-hosted icon web font (PUA glyphs) — mirrors how @loom/ds ships Phosphor. */
+  @font-face {
+    font-family: "NHIcons";
+    src: url("./iconfont.woff2") format("woff2");
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #fff; color: #111; }
+  #toolbar {
+    display: flex; gap: 20px; align-items: center; padding: 18px 24px; margin: 40px;
+    border: 1px solid #ddd; border-radius: 10px; width: max-content; background: #fafafa;
+  }
+  .tool { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 64px; }
+  .ic { font-family: "NHIcons"; font-size: 40px; line-height: 1; color: #2b5cff; }
+  .lbl { font-size: 12px; color: #444; }
+</style>
+</head>
+<body>
+  <div id="toolbar">
+    <div class="tool"><span class="ic">&#xE000;</span><span class="lbl">Fork</span></div>
+    <div class="tool"><span class="ic">&#xE001;</span><span class="lbl">Share</span></div>
+    <div class="tool"><span class="ic">&#xE002;</span><span class="lbl">Deploy</span></div>
+    <div class="tool"><span class="ic">&#xE003;</span><span class="lbl">Preview</span></div>
+    <div class="tool"><span class="ic">&#xE004;</span><span class="lbl">Code</span></div>
+    <div class="tool"><span class="ic">&#xE005;</span><span class="lbl">Plugins</span></div>
+  </div>
+  <script src="./probe.js"></script>
+</body>
+</html>

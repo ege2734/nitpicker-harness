@@ -109,8 +109,14 @@ export function parseBlocks(md: string): Node[] {
     }
     const p = document.createElement("p");
     para.forEach((l, idx) => {
-      if (idx > 0) p.appendChild(document.createElement("br"));
-      appendInline(p, l);
+      if (idx > 0) {
+        // A SOFT line break (single wrapped newline) is whitespace, not a break — otherwise a sentence
+        // wrapped as "wired.\nCSS" would render "wired.CSS" (the inter-word space dropped). CommonMark: soft
+        // break → space; a HARD break (line ends with two+ spaces or a backslash) → <br>.
+        if (/(  +|\\)\s*$/.test(para[idx - 1])) p.appendChild(document.createElement("br"));
+        else p.appendChild(document.createTextNode(" "));
+      }
+      appendInline(p, l.replace(/\\?\s+$/, "")); // drop trailing whitespace / hard-break marker from the text
     });
     out.push(p);
   }
