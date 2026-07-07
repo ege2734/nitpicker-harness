@@ -91,6 +91,19 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
     `@anthropic-ai/claude-agent-sdk` (dynamic-imported by a non-literal specifier so it stays an *optional*
     dep — declared under `optionalDependencies`, never statically required; unit tests never load it) with a
     `claude -p --output-format stream-json` **CLI-spawn fallback** (`makeBackend("claude-cli")`).
+  - `src/agent/system-prompt.ts` — the **default builder-agent persona** `LOOM_BUILDER_SYSTEM_PROMPT` +
+    `resolveSystemPrompt(explicit?, env?)`. This is the **canonical, single source of truth** for the
+    embedded persona: BOTH the standalone `nitpicker-harness <app>` CLI AND Loom's own in-app builder run it
+    (Loom imports the export from the package, or just doesn't override `systemContext` — the default already
+    applies). Adapted from the captain's Lovable prompt (`data/loom-agent-persona/lovable-source-prompt.md`):
+    Lovable branding + `lov-` tags stripped; stack retargeted Vite/Tailwind/shadcn/Supabase → Next.js +
+    `@loom/ds` + FastAPI backend + Loom Plugins; affordances rewritten to the harness's real surface (marks
+    anchored on `file:line:col`, live-preview HMR). **Precedence** (`resolveSystemPrompt`, highest first):
+    explicit caller value (`startEmbeddedBuilder`'s `systemContext` / the CLI's `--system-prompt <file>`) →
+    the `NITPICKER_HARNESS_SYSTEM_PROMPT` env var → the built-in default. Resolved ONCE in
+    `startEmbeddedBuilder` so the eager primary session and the gateway's lazy sessions share one persona.
+    Blank/whitespace overrides are treated as absent (never silently disable the persona). Guarded by
+    `tests/system-prompt.test.ts` (precedence + no residual Lovable/Vite/Supabase + the Loom stack markers).
   - `src/agent/format.ts` — **pure** marks→prompt formatting (element→source line, region→image-path line,
     text-edit→"change X to Y", message→note). `src/agent/gateway.ts` — the **SSE Agent Gateway** mounted on
     the existing server via `startHarness`'s new `mountExtra` hook. Routes under `/__nitpicker-harness/agent`:

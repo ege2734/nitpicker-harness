@@ -88,6 +88,15 @@ above are untouched. The reference agent backend (`--agent claude`) uses the Cla
 `startEmbeddedBuilder()` from `src/index.ts`, the surface the platform layer drives; see
 [`AGENTS.md`](./AGENTS.md).
 
+**Builder-agent persona.** Every embedded session runs the **Loom builder agent** system prompt by default
+(`LOOM_BUILDER_SYSTEM_PROMPT`, exported from `src/index.ts`): a friendly, minimal-scope engineer that knows
+the Loom stack (Next.js + React + TypeScript, the `@loom/ds` design system, a FastAPI backend, Loom Plugins)
+and the harness's own affordances (marks-as-context anchored on `file:line:col`, a live preview that HMRs on
+every edit). Override it per session with `--system-prompt <file>`, the `systemContext` option on
+`startEmbeddedBuilder`, or the `NITPICKER_HARNESS_SYSTEM_PROMPT` env var — an explicit value wins over the
+env var, which wins over the default. Loom's own in-app builder consumes the identical persona by importing
+the export (or simply by not overriding `systemContext`, since the default already applies).
+
 ### Keep the agent driven
 
 `poll` only delivers while the agent is actively running it — once a turn ends and the agent goes idle,
@@ -100,7 +109,7 @@ a mark queued while nothing is polling is never lost; it is delivered to the nex
 ### CLI
 
 ```
-nitpicker-harness <path-to-app> [--dev-cmd "<cmd>"] [--target-port <n>] [--port 4000] [--session nitpicker] [--agent claude|claude-cli] [--no-agent]
+nitpicker-harness <path-to-app> [--dev-cmd "<cmd>"] [--target-port <n>] [--port 4000] [--session nitpicker] [--agent claude|claude-cli] [--no-agent] [--system-prompt <file>]
 nitpicker-harness --target <url> [--port 4000] [--session nitpicker] [--sidecar-port 5178] [--no-sidecar]
 nitpicker-harness poll --session <id> [--endpoint <url>] [--watch]
 nitpicker-harness stop-hook --session <id> [--endpoint <url>] [--timeoutMs <n>]   # turn-end driver hook
