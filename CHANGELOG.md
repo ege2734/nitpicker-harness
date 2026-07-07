@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   additive: the feedback-proxy / builder-shell / sidecar / `poll` / Stop-hook paths are unchanged. Also
   exposed as the `startEmbeddedBuilder()` library (`src/index.ts`), with `@anthropic-ai/claude-agent-sdk`
   as an optional dependency and a `--no-agent` escape hatch to the classic sidecar sink.
+- **Default builder-agent persona** — every embedded session runs the Loom builder system prompt
+  (`LOOM_BUILDER_SYSTEM_PROMPT`) by default, shared by the standalone CLI and Loom's own in-app builder.
+  Override per session with `--system-prompt <file>`, the `systemContext` option, or the
+  `NITPICKER_HARNESS_SYSTEM_PROMPT` env var (explicit value wins over the env var, which wins over the
+  default).
 - Open-source governance: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue/PR templates,
   Dependabot config, and CI/license badges in the README.
 
