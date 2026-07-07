@@ -197,6 +197,22 @@ export function builderPage(cfg: InjectConfig): string {
   .nh-chip .nh-src { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #8a93a0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
   .nh-chip .nh-del { position: absolute; right: 4px; top: 2px; border: 0; background: transparent; color: #6b727c; cursor: pointer; font-size: 13px; line-height: 1; }
   .nh-chip .nh-del:hover { color: #e06c6c; }
+  /* Markdown-rendered agent replies (src/builder/markdown.ts builds sanitized DOM into .nh-md). */
+  .nh-md { font-size: 13px; }
+  .nh-md > *:first-child { margin-top: 0; }
+  .nh-md > *:last-child { margin-bottom: 0; }
+  .nh-md p { margin: 6px 0; }
+  .nh-md h1, .nh-md h2, .nh-md h3, .nh-md h4, .nh-md h5, .nh-md h6 { margin: 10px 0 6px; line-height: 1.3; }
+  .nh-md h1 { font-size: 16px; } .nh-md h2 { font-size: 15px; } .nh-md h3 { font-size: 14px; }
+  .nh-md h4, .nh-md h5, .nh-md h6 { font-size: 13px; }
+  .nh-md ul, .nh-md ol { margin: 6px 0; padding-left: 20px; }
+  .nh-md li { margin: 2px 0; }
+  .nh-md code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #0e1114; border: 1px solid #23272e; border-radius: 4px; padding: 1px 4px; }
+  .nh-md pre { background: #0e1114; border: 1px solid #23272e; border-radius: 6px; padding: 8px 10px; overflow-x: auto; margin: 6px 0; }
+  .nh-md pre code { background: none; border: 0; padding: 0; }
+  .nh-md a { color: #7fb0ff; }
+  .nh-md blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid #2b313a; color: #9aa2ac; }
+  .nh-md hr { border: 0; border-top: 1px solid #23272e; margin: 8px 0; }
   .nh-compose { border-top: 1px solid #23272e; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
   .nh-compose textarea {
     resize: none; width: 100%; min-height: 56px; max-height: 160px; padding: 8px 10px; border-radius: 8px;

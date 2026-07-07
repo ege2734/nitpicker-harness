@@ -6,6 +6,26 @@ import { compositeRegion, checkCaptureScale } from "./redbox";
 import { ambientEnv, type Env } from "./env";
 import type { Rect } from "./types";
 
+/**
+ * Force every declared @font-face in `doc` to load, then await the whole FontFaceSet, so a capture never
+ * rasterizes before self-hosted icon webfonts (e.g. @loom/ds's Phosphor font, 3 weights) have resolved —
+ * otherwise html2canvas embeds the @font-face but the clone paints the missing-glyph tofu box for every icon.
+ * Generic (no font-name hardcoding): it warms whatever the page declares. Best-effort — a missing/partial
+ * FontFaceSet (jsdom in unit tests, or an ancient engine) is skipped so capture still proceeds.
+ */
+async function ensureFontsReady(doc: Document | null | undefined): Promise<void> {
+  try {
+    const fonts = doc?.fonts as FontFaceSet | undefined;
+    if (!fonts) return;
+    if (typeof (fonts as unknown as Iterable<FontFace>)[Symbol.iterator] === "function") {
+      await Promise.all(Array.from(fonts).map((f) => f.load().catch(() => undefined)));
+    }
+    if (fonts.ready) await fonts.ready;
+  } catch {
+    /* FontFaceSet unavailable / not iterable — proceed without the pre-warm */
+  }
+}
+
 export interface CaptureResult {
   blob: Blob;
   /** the composited frozen canvas, shown on top to freeze the view. */
@@ -47,6 +67,10 @@ export async function rasterizeViewport(
   const { default: html2canvas } = await import("html2canvas-pro");
   const { doc, win } = env;
   const viewport = { w: win.innerWidth, h: win.innerHeight };
+  // Ensure self-hosted webfonts (e.g. @loom/ds's Phosphor icon font) are fully loaded BEFORE rasterizing —
+  // html2canvas embeds same-origin @font-face rules into its clone, but if the glyphs haven't resolved yet it
+  // captures the missing-glyph tofu box (□) for every icon. See ensureFontsReady.
+  await ensureFontsReady(doc);
 
   const canvas = await html2canvas(doc.body, {
     x: win.scrollX,
@@ -183,6 +207,7 @@ export async function rasterizeFrozen(snapshot: FrozenSnapshot, scale: number): 
   const { default: html2canvas } = await import("html2canvas-pro");
   await snapshot.decode; // ensure canvas→img replacements have decoded before we paint
   const { holder, viewport } = snapshot;
+  await ensureFontsReady(holder.ownerDocument); // icon-font glyphs must be loaded or they tofu (see above)
   const canvas = await html2canvas(holder, {
     x: 0,
     y: 0,

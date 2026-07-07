@@ -167,6 +167,23 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
     marks as context). Flush first folds any un-staged composer text in, so a single quick message still sends
     in one ⌘↵ gesture. `tests/compose.test.ts`. The classic **shell** composer (Enter=queue via `queueMessage`)
     is unchanged.
+  - **Sent-turn history + markdown agent replies (builder pane).** (1) **Sent-turn history** — flush no
+    longer fires-and-clears: `BuilderChrome.appendSentTurn` records the flushed batch as an expandable entry
+    in the transcript (above the streamed reply). `buildSentTurn` (in `queue.ts`) renders a collapsed summary
+    (lead text + kind/count badge, e.g. "2 marks · 1 message") that expands to each item as a **read-only**
+    queued item (`buildQueueItem(..., { readonly: true })` — no remove, no note textarea; note shown
+    statically), including the red-boxed region screenshot with **click-to-lightbox**. The batch's item
+    objects are retained (with `_thumb`/`_blob`) so screenshots render later; memory is bounded by
+    `pruneSentBlobs` (full-res `_blob` kept for the most recent `FULLRES_TURNS`=10 turns, older drop it and
+    fall back to the always-kept `_thumb`). No object URLs are created for previews (thumbs are data URLs), so
+    nothing leaks on flush — the lightbox revokes its own on close. `tests/queue.test.ts` (`buildSentTurn`).
+    (2) **Markdown agent replies** (`src/builder/markdown.ts`) — assistant messages render as sanitized
+    markdown into a `.nh-md` container instead of raw text. `renderMarkdownInto` builds DOM with
+    createElement/textContent (never innerHTML) + scheme-checked links, so agent output can't inject HTML/XSS;
+    it's STREAM-SAFE (re-parses the accumulated string per token, coalesced to one paint/frame via rAF;
+    unterminated fences / half-typed `**bold` degrade gracefully) and dependency-light (no new deps). Emphasis
+    is `*`-only (never `_`) so `file_line_col` paths aren't mangled. `.nh-md` styles live in `builderPage()`;
+    `tests/markdown.test.ts`. User messages stay plain. Classic shell chat unchanged.
   - **Overlay-suppression is MODE-gated (no double UI):** the embedded builder pane drives element-pick /
     region / inline-edit from the PARENT against its iframe (the reused `InteractionLayer`/`Env` seam), so
     injecting the classic in-frame overlay dock+queue would be a redundant SECOND feedback UI over the same

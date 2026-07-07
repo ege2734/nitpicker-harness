@@ -2,7 +2,13 @@
 // the per-kind row, the expandable detail (region screenshot / element+edit descriptor), remove/toggle, and
 // live note edit. Runs under the default jsdom env.
 import { describe, it, expect, beforeEach } from "vitest";
-import { buildQueueItem, kindLabel, descriptorLines, type QueueItemHandlers } from "../src/builder/queue";
+import {
+  buildQueueItem,
+  buildSentTurn,
+  kindLabel,
+  descriptorLines,
+  type QueueItemHandlers,
+} from "../src/builder/queue";
 import type { QueueItem } from "../vendor/nitpicker/core/types";
 
 function baseItem(over: Partial<QueueItem>): QueueItem {
@@ -171,5 +177,54 @@ describe("buildQueueItem (expanded)", () => {
     expect((box!.querySelector("img") as HTMLImageElement).src).toContain("data:image/png");
     // cleanup
     box!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+});
+
+describe("buildSentTurn (history entry)", () => {
+  it("collapsed: shows the lead message + kind/count badge, no item bodies", () => {
+    const turn = buildSentTurn([
+      baseItem({ kind: "message", text: "make the header sticky" }),
+      baseItem({ kind: "region", _thumb: "data:," }),
+    ]);
+    expect(turn.querySelector(".nh-sent-summary")!.textContent).toContain("make the header sticky");
+    expect(turn.querySelector(".nh-sent-badge")!.textContent).toBe("1 mark · 1 message");
+    expect(turn.querySelector(".nh-sent-body")).toBeNull();
+  });
+
+  it("expands to show each item read-only (no remove button, no note textarea)", () => {
+    const turn = buildSentTurn([
+      baseItem({ kind: "message", text: "hi" }),
+      baseItem({ kind: "region", _thumb: "data:image/png;base64,AAA", text: "this bit" }),
+    ]);
+    document.body.appendChild(turn);
+    (turn.querySelector(".nh-sent-head") as HTMLElement).click();
+    const body = turn.querySelector(".nh-sent-body")!;
+    expect(body.querySelectorAll(".nh-item")).toHaveLength(2);
+    // read-only: no remove buttons, no editable textareas; notes shown statically
+    expect(body.querySelector(".nh-del")).toBeNull();
+    expect(body.querySelector(".nh-item-noteedit")).toBeNull();
+    const notes = [...body.querySelectorAll(".nh-item-noteview")].map((n) => n.textContent);
+    expect(notes).toContain("hi");
+    expect(notes).toContain("this bit");
+  });
+
+  it("keeps the region screenshot clickable → lightbox in history", () => {
+    const turn = buildSentTurn([baseItem({ kind: "region", _thumb: "data:image/png;base64,AAA" })]);
+    document.body.appendChild(turn);
+    (turn.querySelector(".nh-sent-head") as HTMLElement).click();
+    const img = turn.querySelector("img.nh-item-img") as HTMLImageElement;
+    expect(img).not.toBeNull();
+    img.click();
+    expect(document.querySelector(".nh-lightbox")).not.toBeNull();
+    document.querySelector(".nh-lightbox")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+
+  it("collapses again on a second header click", () => {
+    const turn = buildSentTurn([baseItem({ kind: "message", text: "x" })]);
+    const head = () => turn.querySelector(".nh-sent-head") as HTMLElement;
+    head().click();
+    expect(turn.querySelector(".nh-sent-body")).not.toBeNull();
+    head().click();
+    expect(turn.querySelector(".nh-sent-body")).toBeNull();
   });
 });

@@ -18,8 +18,9 @@ import type { ParentBox } from "../shell/geometry";
 import type { AgentEvent } from "../agent/backend";
 import { AgentGatewayClient } from "./client";
 import { AnnotationPopup, annotateLabel } from "./annotate";
-import { buildQueueItem } from "./queue";
+import { buildQueueItem, buildSentTurn } from "./queue";
 import { classifyComposerKey, partitionQueue } from "./compose";
+import { renderMarkdownInto } from "./markdown";
 
 function readConfig(): { session: string; endpoint: string } {
   const fallback = { session: "nitpicker", endpoint: "http://127.0.0.1:5178" };
@@ -46,7 +47,14 @@ class BuilderChrome implements InteractionSink {
   private sending = false;
   private busy = false;
   private currentAssistant: HTMLElement | null = null;
-  private currentAssistantText: Text | null = null;
+  // Streaming assistant reply rendered as markdown: accumulate the raw string and re-render into `.nh-md`.
+  private currentMdEl: HTMLElement | null = null;
+  private currentMd = "";
+  private mdScheduled = false;
+  // Sent-turn history: the flushed batches, retained so their marks' _thumb/_blob render the screenshots
+  // later. Full-res _blob is kept only for the most recent FULLRES_TURNS turns (older keep just the thumb).
+  private readonly sentTurns: { id: string; items: QueueItem[] }[] = [];
+  private static readonly FULLRES_TURNS = 10;
 
   private readonly transcriptEl = document.getElementById("nh-transcript") as HTMLElement;
   private readonly marksEl = document.getElementById("nh-marks") as HTMLElement;
@@ -174,7 +182,8 @@ class BuilderChrome implements InteractionSink {
   private async flush(): Promise<void> {
     if (this.sending || this.busy) return;
     this.queueFromComposer(); // fold any un-staged composer text into the queue first
-    const { text, marks } = partitionQueue(this.pendingMarks);
+    const batch = this.pendingMarks.slice(); // the full sent turn (messages + marks) for the history entry
+    const { text, marks } = partitionQueue(batch);
     if (!text && marks.length === 0) return;
     this.sending = true;
     this.updateControls();
@@ -186,7 +195,8 @@ class BuilderChrome implements InteractionSink {
         await Promise.all(pending);
       }
       const uploadable = marks.filter((i) => !(i.kind === "region" && !i._blob));
-      this.appendMessage("user", text, uploadable);
+      // Persist the sent batch as an expandable history entry (above the agent's streamed reply).
+      this.appendSentTurn(batch);
       await this.client.send(text, uploadable);
       this.pendingMarks = [];
       this.expandedId = null;
@@ -205,18 +215,12 @@ class BuilderChrome implements InteractionSink {
     switch (e.type) {
       case "turn_start":
         this.setBusy(true);
-        this.currentAssistant = this.appendMessage("assistant", "");
-        this.currentAssistantText = document.createTextNode("");
-        this.currentAssistant.appendChild(this.currentAssistantText);
+        this.startAssistant();
         break;
       case "token":
-        if (!this.currentAssistantText) {
-          this.currentAssistant = this.appendMessage("assistant", "");
-          this.currentAssistantText = document.createTextNode("");
-          this.currentAssistant.appendChild(this.currentAssistantText);
-        }
-        this.currentAssistantText.appendData(e.text);
-        this.scrollToEnd();
+        if (!this.currentMdEl) this.startAssistant();
+        this.currentMd += e.text;
+        this.scheduleMarkdownRender();
         break;
       case "tool_use":
         this.appendTool(`▶ ${e.name}`);
@@ -228,8 +232,10 @@ class BuilderChrome implements InteractionSink {
         this.appendTool(`✎ edited ${e.path}`, false, true);
         break;
       case "turn_end":
+        this.renderMarkdownNow(); // flush any pending token render before detaching
         this.currentAssistant = null;
-        this.currentAssistantText = null;
+        this.currentMdEl = null;
+        this.currentMd = "";
         this.setBusy(false);
         break;
       case "error":
@@ -249,7 +255,9 @@ class BuilderChrome implements InteractionSink {
     this.transcriptEl.appendChild(empty);
   }
 
-  private appendMessage(role: "user" | "assistant", text: string, marks?: QueueItem[]): HTMLElement {
+  /** Append a chat bubble. Assistant text renders as sanitized markdown (into a `.nh-md` container); user
+   *  text stays plain. */
+  private appendMessage(role: "user" | "assistant", text: string): HTMLElement {
     const empty = this.transcriptEl.querySelector(".nh-empty");
     if (empty) empty.remove();
     const row = document.createElement("div");
@@ -258,16 +266,65 @@ class BuilderChrome implements InteractionSink {
     label.className = "nh-role";
     label.textContent = role;
     row.appendChild(label);
-    if (text) row.appendChild(document.createTextNode(text));
-    if (marks && marks.length) {
-      const note = document.createElement("span");
-      note.className = "nh-tool";
-      note.textContent = `+ ${marks.length} mark${marks.length === 1 ? "" : "s"}`;
-      row.appendChild(note);
+    if (role === "assistant") {
+      const md = document.createElement("div");
+      md.className = "nh-md";
+      if (text) renderMarkdownInto(md, text);
+      row.appendChild(md);
+    } else if (text) {
+      row.appendChild(document.createTextNode(text));
     }
     this.transcriptEl.appendChild(row);
     this.scrollToEnd();
     return row;
+  }
+
+  /** Start (or restart) the streaming assistant bubble + its markdown container. */
+  private startAssistant(): void {
+    this.currentAssistant = this.appendMessage("assistant", "");
+    this.currentMdEl = this.currentAssistant.querySelector(".nh-md");
+    this.currentMd = "";
+  }
+
+  /** Coalesce per-token markdown re-renders to one paint per frame (smooth + stream-safe). */
+  private scheduleMarkdownRender(): void {
+    if (this.mdScheduled) return;
+    this.mdScheduled = true;
+    const raf =
+      typeof requestAnimationFrame === "function" ? requestAnimationFrame : (cb: () => void) => setTimeout(cb, 16);
+    raf(() => {
+      this.mdScheduled = false;
+      this.renderMarkdownNow();
+    });
+  }
+
+  private renderMarkdownNow(): void {
+    if (this.currentMdEl) {
+      renderMarkdownInto(this.currentMdEl, this.currentMd);
+      this.scrollToEnd();
+    }
+  }
+
+  /** Persist a flushed batch as an expandable sent-turn entry in the transcript. */
+  private appendSentTurn(items: QueueItem[]): void {
+    this.sentTurns.push({ id: newId(), items });
+    this.pruneSentBlobs();
+    const empty = this.transcriptEl.querySelector(".nh-empty");
+    if (empty) empty.remove();
+    this.transcriptEl.appendChild(buildSentTurn(items));
+    this.scrollToEnd();
+  }
+
+  /** Bound memory: keep the full-res region `_blob` only for the most recent FULLRES_TURNS turns; older
+   *  turns drop it so the Blob can be GC'd (the always-visible `_thumb` data URL stays, and the lightbox
+   *  falls back to it). No object URLs are created here, so there's nothing to leak. */
+  private pruneSentBlobs(): void {
+    const cutoff = this.sentTurns.length - BuilderChrome.FULLRES_TURNS;
+    for (let i = 0; i < cutoff; i++) {
+      for (const it of this.sentTurns[i].items) {
+        if (it.kind === "region" && it._blob) it._blob = undefined;
+      }
+    }
   }
 
   private appendTool(text: string, isError = false, isFile = false): void {

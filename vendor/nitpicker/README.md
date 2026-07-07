@@ -85,3 +85,10 @@ it is **not** upstreamed — preserve it on every re-sync (do NOT blind-copy `re
   switched with no call-site change. The two tests that mock the module (`tests/hotkey.test.ts`,
   `tests/env-seam.test.ts`) mock `html2canvas-pro`; `cli/verify.ts`'s `html2canvas` prod-leak MARKER still
   matches (the fork's bundle retains the `html2canvas` substring). Preserve on re-sync.
+- **`core/region.ts` — `ensureFontsReady()` webfont pre-warm before every capture.** `rasterizeViewport`
+  and `rasterizeFrozen` now `await ensureFontsReady(doc)` before calling html2canvas: it forces every
+  declared `@font-face` to `.load()` then awaits the `FontFaceSet` `.ready`. Without it a self-hosted icon
+  webfont (e.g. `@loom/ds`'s Phosphor font) that hasn't finished loading at capture time rasterizes as the
+  missing-glyph tofu box (□) for every icon — html2canvas embeds the same-origin `@font-face` but paints
+  before the glyphs resolve. Generic (no font-name hardcoding); best-effort (a missing/partial FontFaceSet,
+  e.g. jsdom, is skipped). Covered by `tests/region-fonts.test.ts`. Preserve on re-sync.

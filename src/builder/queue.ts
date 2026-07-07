@@ -52,29 +52,40 @@ export function descriptorLines(item: QueueItem): string[] {
 
 const MONO = "ui-monospace,SFMono-Regular,Menlo,monospace";
 
+export interface QueueItemOptions {
+  /** Read-only rendering for a SENT-turn history entry: no remove button, no header toggle, and the note is
+   *  shown as static text instead of an editable textarea. The region screenshot + click-to-lightbox and the
+   *  element/edit descriptor stay. */
+  readonly?: boolean;
+}
+
 /** Build one expandable queued-mark row for the builder pane. `expanded` opens its detail panel. */
 export function buildQueueItem(
   item: QueueItem,
   handlers: QueueItemHandlers,
   expanded: boolean,
+  opts?: QueueItemOptions,
 ): HTMLElement {
+  const readonly = opts?.readonly === true;
   const row = document.createElement("div");
   row.className = "nh-item";
   row.dataset.id = item.id;
   row.style.cssText =
     "border:1px solid #262b33;border-radius:8px;background:#1a1e24;overflow:hidden;";
 
-  // ---- header (click toggles the detail) ----
+  // ---- header (click toggles the detail; static in read-only history) ----
   const head = document.createElement("div");
   head.className = "nh-item-head";
   head.style.cssText =
-    "display:flex;align-items:center;gap:8px;padding:7px 8px 7px 10px;cursor:pointer;";
-  head.addEventListener("click", () => handlers.onToggle(item.id));
+    "display:flex;align-items:center;gap:8px;padding:7px 8px 7px 10px;" + (readonly ? "" : "cursor:pointer;");
+  if (!readonly) head.addEventListener("click", () => handlers.onToggle(item.id));
 
-  const caret = document.createElement("span");
-  caret.textContent = expanded ? "▾" : "▸";
-  caret.style.cssText = "color:#6b727c;font-size:10px;flex:0 0 auto;";
-  head.appendChild(caret);
+  if (!readonly) {
+    const caret = document.createElement("span");
+    caret.textContent = expanded ? "▾" : "▸";
+    caret.style.cssText = "color:#6b727c;font-size:10px;flex:0 0 auto;";
+    head.appendChild(caret);
+  }
 
   const kind = document.createElement("span");
   kind.className = "nh-item-kind";
@@ -101,18 +112,20 @@ export function buildQueueItem(
     (item.text ? "" : "font-style:italic;");
   head.appendChild(note);
 
-  const del = document.createElement("button");
-  del.className = "nh-del";
-  del.type = "button";
-  del.setAttribute("aria-label", "Remove mark");
-  del.textContent = "×";
-  del.style.cssText =
-    "flex:0 0 auto;border:0;background:transparent;color:#6b727c;cursor:pointer;font-size:15px;line-height:1;padding:0 2px;";
-  del.addEventListener("click", (e) => {
-    e.stopPropagation();
-    handlers.onRemove(item.id);
-  });
-  head.appendChild(del);
+  if (!readonly) {
+    const del = document.createElement("button");
+    del.className = "nh-del";
+    del.type = "button";
+    del.setAttribute("aria-label", "Remove mark");
+    del.textContent = "×";
+    del.style.cssText =
+      "flex:0 0 auto;border:0;background:transparent;color:#6b727c;cursor:pointer;font-size:15px;line-height:1;padding:0 2px;";
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      handlers.onRemove(item.id);
+    });
+    head.appendChild(del);
+  }
   row.appendChild(head);
 
   if (!expanded) return row;
@@ -137,29 +150,40 @@ export function buildQueueItem(
     if (lines.length) detail.appendChild(descBlock(lines.join("\n")));
   }
 
-  const ta = document.createElement("textarea");
-  ta.className = "nh-item-noteedit";
-  ta.placeholder = "Edit note… (Enter to save · Shift+Enter newline · Esc cancel)";
-  ta.value = item.text ?? "";
-  ta.rows = 2;
-  ta.style.cssText =
-    "resize:none;width:100%;box-sizing:border-box;padding:6px 8px;border-radius:6px;border:1px solid #2b313a;background:#0e1114;color:#e6e8eb;font:inherit;font-size:12px;";
-  // Enter-to-save (mirrors the classic overlay item modal's Save + collapse); Esc cancels the edit (the
-  // prior note is untouched — edits aren't live-applied); Shift+Enter is a newline within the note.
-  ta.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handlers.onNoteChange(item.id, ta.value.trim());
-      handlers.onToggle(item.id); // collapse/confirm
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      e.stopPropagation();
-      handlers.onToggle(item.id); // collapse without saving
+  if (readonly) {
+    // History: the note is already sent — show it statically (only when present).
+    if (item.text) {
+      const noteBlock = document.createElement("div");
+      noteBlock.className = "nh-item-noteview";
+      noteBlock.textContent = item.text;
+      noteBlock.style.cssText = "color:#e6e8eb;font-size:12px;white-space:pre-wrap;word-break:break-word;";
+      detail.appendChild(noteBlock);
     }
-  });
-  // Don't let a click inside the textarea bubble to the header toggle.
-  ta.addEventListener("click", (e) => e.stopPropagation());
-  detail.appendChild(ta);
+  } else {
+    const ta = document.createElement("textarea");
+    ta.className = "nh-item-noteedit";
+    ta.placeholder = "Edit note… (Enter to save · Shift+Enter newline · Esc cancel)";
+    ta.value = item.text ?? "";
+    ta.rows = 2;
+    ta.style.cssText =
+      "resize:none;width:100%;box-sizing:border-box;padding:6px 8px;border-radius:6px;border:1px solid #2b313a;background:#0e1114;color:#e6e8eb;font:inherit;font-size:12px;";
+    // Enter-to-save (mirrors the classic overlay item modal's Save + collapse); Esc cancels the edit (the
+    // prior note is untouched — edits aren't live-applied); Shift+Enter is a newline within the note.
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        handlers.onNoteChange(item.id, ta.value.trim());
+        handlers.onToggle(item.id); // collapse/confirm
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        handlers.onToggle(item.id); // collapse without saving
+      }
+    });
+    // Don't let a click inside the textarea bubble to the header toggle.
+    ta.addEventListener("click", (e) => e.stopPropagation());
+    detail.appendChild(ta);
+  }
 
   if (item.route) {
     const route = document.createElement("span");
@@ -214,4 +238,72 @@ function tryObjectURL(blob: Blob): string | null {
   } catch {
     return null;
   }
+}
+
+const READONLY_HANDLERS: QueueItemHandlers = { onRemove: () => {}, onToggle: () => {}, onNoteChange: () => {} };
+
+/** A SENT-turn history entry for the builder transcript: collapsed shows a compact summary (lead text +
+ *  kind badges); expanded lists every item of the flushed batch as a read-only queued item (message text /
+ *  region screenshot with click-to-lightbox / element+edit descriptor). Self-contained expand toggle. The
+ *  items are the SAME objects retained in history, so their `_thumb`/`_blob` render the screenshots later. */
+export function buildSentTurn(items: QueueItem[]): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "nh-msg nh-user nh-sent";
+  row.style.cssText =
+    "background:#1c2534;border:1px solid #26344a;border-radius:8px;padding:8px 10px;align-self:flex-end;max-width:96%;";
+
+  const messages = items.filter((i) => i.kind === "message");
+  const marks = items.filter((i) => i.kind !== "message");
+  const lead = (messages[0]?.text || marks.find((m) => m.text)?.text || "(marks only)").trim();
+  const badgeParts: string[] = [];
+  if (marks.length) badgeParts.push(`${marks.length} mark${marks.length === 1 ? "" : "s"}`);
+  if (messages.length) badgeParts.push(`${messages.length} message${messages.length === 1 ? "" : "s"}`);
+
+  let expanded = false;
+  const render = (): void => {
+    row.textContent = "";
+    const head = document.createElement("div");
+    head.className = "nh-sent-head";
+    head.style.cssText = "display:flex;align-items:center;gap:8px;cursor:pointer;";
+    head.addEventListener("click", () => {
+      expanded = !expanded;
+      render();
+    });
+
+    const caret = document.createElement("span");
+    caret.textContent = expanded ? "▾" : "▸";
+    caret.style.cssText = "color:#7f8aa0;font-size:10px;flex:0 0 auto;";
+    const role = document.createElement("span");
+    role.className = "nh-role";
+    role.textContent = "you";
+    role.style.cssText =
+      "flex:0 0 auto;font-size:10px;letter-spacing:.4px;text-transform:uppercase;color:#7f8aa0;";
+    const summary = document.createElement("span");
+    summary.className = "nh-sent-summary";
+    summary.textContent = truncate(lead, 60);
+    summary.style.cssText =
+      "flex:1 1 auto;min-width:0;color:#e6e8eb;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    const badge = document.createElement("span");
+    badge.className = "nh-sent-badge";
+    badge.textContent = badgeParts.join(" · ");
+    badge.style.cssText = "flex:0 0 auto;font-size:10px;color:#7f8aa0;";
+    head.append(caret, role, summary, badge);
+    row.appendChild(head);
+
+    if (expanded) {
+      const body = document.createElement("div");
+      body.className = "nh-sent-body";
+      body.style.cssText = "display:flex;flex-direction:column;gap:6px;margin-top:8px;";
+      for (const it of items) {
+        body.appendChild(buildQueueItem(it, READONLY_HANDLERS, true, { readonly: true }));
+      }
+      row.appendChild(body);
+    }
+  };
+  render();
+  return row;
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
 }
