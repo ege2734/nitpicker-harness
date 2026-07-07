@@ -118,6 +118,20 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
     `src/builder/{entry,build}.ts` + `inject.ts:builderPage()` serve the new `/__nitpicker-harness/build[.js]`
     pane (sibling of the shell). Extraction is behavior-preserving — guarded by `tests/interaction.test.ts`
     + the unchanged `tests/shell-geometry.test.ts` / vendor `env-seam.test.ts`.
+  - **Overlay-suppression seam (no double UI):** the embedded builder pane drives element-pick / region /
+    inline-edit from the PARENT against its iframe (the reused `InteractionLayer`/`Env` seam), so injecting
+    the classic in-frame overlay dock+queue would be a redundant SECOND feedback UI over the same preview.
+    `builderPage()` therefore loads its iframe as `src="/?__nh_no_overlay=1"` (the `NO_OVERLAY_PARAM` flag in
+    `inject.ts`); `server.ts`'s `proxyRes` HTML path calls `suppressesOverlay(req.url)` and **skips**
+    `injectOverlay` when the flag is present. The flag is internal to `builderPage()`. **Direct app requests
+    (feedback-proxy mode) and the classic shell iframe (`src="/"`) never carry it → overlay injected exactly
+    as before** — byte-for-byte unchanged. NOTE the flag rides the INITIAL iframe `src` only: a full-page
+    navigation the app itself drives (a hard link to another route) re-requests HTML without it and would
+    re-inject; the live builder flow is HMR-driven (module patches, no navigation) so the preview stays
+    clean in practice. The classic **shell** (`/shell`) has the same in-frame-overlay redundancy but is left
+    unchanged here (preserved, not regressed); flip its iframe `src` the same way if that's ever wanted.
+    Guarded by `tests/inject.test.ts` (`suppressesOverlay` + `builderPage` flag) and `tests/proxy-embed.test.ts`
+    (through the real proxy: suppressed request has no overlay `<script>`, direct request still does).
 
   The **load-bearing reuse**: the agent edits real source files → the app's own HMR (already forwarded
   through the proxy) reloads the iframe. No preview-refresh channel is built; chat + live preview stay in

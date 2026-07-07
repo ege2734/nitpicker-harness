@@ -53,7 +53,9 @@ describe("embedded mode through the proxy", () => {
     const res = await fetch(harness.url + "/__nitpicker-harness/build");
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('<iframe id="nh-frame" src="/"');
+    // The iframe carries the overlay-suppression flag so the classic in-frame dock isn't double-injected
+    // (the builder pane drives interaction from the parent). See the suppression test below.
+    expect(html).toContain('<iframe id="nh-frame" src="/?__nh_no_overlay=1"');
     expect(html).toContain('id="nh-transcript"');
     expect(html).toContain("/__nitpicker-harness/build.js");
     expect(html).toContain("session=embed");
@@ -79,6 +81,26 @@ describe("embedded mode through the proxy", () => {
     expect(body.sessionId).toBe("embed");
     expect(Array.isArray(body.messages)).toBe(true);
     expect(body.running).toBe(false);
+  });
+
+  it("does NOT inject the classic overlay into the builder pane's iframe (no double UI)", async () => {
+    // The builder iframe loads the app with the suppression flag → clean preview, sole interface is the pane.
+    const res = await fetch(harness.url + "/?__nh_no_overlay=1");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("<h1>app</h1>");
+    expect(html).not.toContain('data-nitpicker-harness="overlay"');
+    expect(html).not.toContain("/__nitpicker-harness/overlay.js");
+  });
+
+  it("STILL injects the overlay for a direct feedback-proxy request (no regression)", async () => {
+    // No suppression flag → the classic feedback-proxy overlay is injected exactly as before.
+    const res = await fetch(harness.url + "/");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("<h1>app</h1>");
+    expect(html).toContain('data-nitpicker-harness="overlay"');
+    expect(html).toContain("/__nitpicker-harness/overlay.js");
   });
 
   it("still serves the classic shell + overlay (byte-for-byte additive)", async () => {

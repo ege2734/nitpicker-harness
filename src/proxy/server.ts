@@ -30,6 +30,7 @@ import {
   BUILD_PATH,
   BUILD_JS_PATH,
   injectOverlay,
+  suppressesOverlay,
   relaxSecurityHeaders,
   rewriteAbsoluteUrls,
   shellPage,
@@ -117,7 +118,12 @@ export function startHarness(opts: HarnessOptions): Promise<Harness> {
         settled = true;
         let body = Buffer.concat(chunks).toString("utf8");
         body = rewriteAbsoluteUrls(body, targetOrigin, harnessOrigin);
-        body = injectOverlay(body, injectCfg);
+        // The embedded builder pane loads its iframe with NO_OVERLAY_PARAM so the classic in-frame overlay
+        // isn't injected (it drives interaction from the parent — a second dock would be redundant). Direct
+        // feedback-proxy requests never carry the flag, so they inject exactly as before.
+        if (!suppressesOverlay(req.url)) {
+          body = injectOverlay(body, injectCfg);
+        }
         // Body length changed (and any upstream chunked/encoding no longer applies) — reset framing.
         delete headers["content-length"];
         delete headers["transfer-encoding"];
