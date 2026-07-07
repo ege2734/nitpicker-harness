@@ -16,11 +16,16 @@ npm run typecheck  # tsc --noEmit
 npm test           # vitest: proxy injection (tests/) + overlay engine (vendor/nitpicker/tests/)
 ```
 
-To run the harness against a live app:
+To run the harness against a live app (runs the TS source under tsx for a fast edit loop; `start` is a
+kept alias):
 
 ```bash
-npm run start -- --target http://localhost:3000
+npm run dev -- --target http://localhost:3000
 ```
+
+Consumers install a **compiled** package: `npm run build` produces `dist/` and `npm run verify-pack`
+proves a packed, production-installed tarball is runnable with no dev deps. See the "Packaging" section of
+[`AGENTS.md`](./AGENTS.md).
 
 See [`AGENTS.md`](./AGENTS.md) for the load-bearing design notes and the sharp edges learned the hard way.
 

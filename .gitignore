@@ -35,3 +35,6 @@ coverage/
 /scratch/
 .playwright-mcp/
 /nitpicker-harness-*.png
+
+# Packed tarballs (build artifacts)
+*.tgz

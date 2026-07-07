@@ -14,7 +14,7 @@ Phase-0 proxy fix (see `src/proxy/server.ts` `forwardUpgrade` + the `delete head
 cd tests/fixtures/next16-app && npm install          # once
 PORT=3111 npm run dev &                               # target dev server
 # from the repo root:
-npm run start -- --target http://127.0.0.1:3111 --port 4333 --sidecar-port 5381 \
+npm run dev -- --target http://127.0.0.1:3111 --port 4333 --sidecar-port 5381 \
   --endpoint http://127.0.0.1:5381 &
 ```
 

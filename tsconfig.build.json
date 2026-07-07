@@ -1,0 +1,31 @@
+{
+  // Declaration-only emit for the published library surface. The runnable JS is produced by
+  // scripts/build.mjs (esbuild); this pass only writes .d.ts so consumers (Loom) get the
+  // AgentBackend/AppRuntime/EmbeddedBuilder types. rootDir "." keeps the emitted tree self-consistent
+  // (dist/types/{src,vendor}/…), so package.json `types` points at dist/types/src/index.d.ts.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationMap": false,
+    "rootDir": ".",
+    "outDir": "dist/types"
+  },
+  "include": [
+    "src/**/*.ts",
+    "vendor/nitpicker/core/**/*.ts",
+    "vendor/nitpicker/server/**/*.ts",
+    "vendor/nitpicker/cli/**/*.ts",
+    "vendor/nitpicker/react/react-source.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "vendor/nitpicker/react/dev-overlay.tsx",
+    "vendor/nitpicker/next/**",
+    "**/*.cjs",
+    "tests/**",
+    "vendor/nitpicker/tests/**",
+    "tests/fixtures/**"
+  ]
+}

@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Dependabot config, and CI/license badges in the README.
 
 ### Fixed
+- **Runnable as a clean, no-dev dependency** — the package now ships **compiled JS in `dist/`** and runs
+  it with plain `node`; there is no `tsx` at runtime. Previously the `bin` and sidecar ran the TypeScript
+  source under `tsx` (a devDependency), so a production/git install crashed at startup with
+  `Cannot find module .../tsx/dist/cli.mjs` (`ERR_PACKAGE_PATH_NOT_EXPORTED` under pnpm). `prepare`/`prepack`
+  build `dist/` on install/publish; `esbuild`/`html2canvas` moved to devDependencies, leaving `http-proxy`
+  as the only runtime dependency (the Claude Agent SDK stays an optional dynamic import). The consumer
+  contract is unchanged (same CLI and `import … from "nitpicker-harness"`); `npm run verify-pack` guards it.
 - **Region freeze no longer shifts the page** — `Overlay.appWidth()` now measures
   `documentElement.clientWidth` (viewport minus a classic scrollbar's gutter) instead of
   `window.innerWidth`, so the frozen-region clone lays out at the live content width. Only visible with
