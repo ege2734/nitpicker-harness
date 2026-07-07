@@ -10,8 +10,6 @@ import {
   relaxSecurityHeaders,
   shellPage,
   builderPage,
-  suppressesOverlay,
-  NO_OVERLAY_PARAM,
   OVERLAY_PATH,
   SHELL_JS_PATH,
 } from "../src/proxy/inject";
@@ -97,21 +95,12 @@ describe("shellPage", () => {
 });
 
 describe("overlay suppression (embedded builder)", () => {
-  it("builderPage loads its iframe with the no-overlay flag; shellPage does not", () => {
-    const build = builderPage(CFG);
-    expect(build).toContain(`<iframe id="nh-frame" src="/?${NO_OVERLAY_PARAM}=1"`);
-    // The classic shell keeps the plain src — its behavior is preserved (still gets the injected overlay).
+  it("both the builder pane and the classic shell load their iframe with a plain src", () => {
+    // Suppression is mode-gated in server.ts (builderPane on ⇒ never inject), NOT a query flag on the src —
+    // so the builder iframe loads the app with no marker at all. That's what makes it survive redirects +
+    // SPA navigation: EVERY app request through an embedded harness is suppressed, regardless of its URL.
+    expect(builderPage(CFG)).toContain('<iframe id="nh-frame" src="/"');
     expect(shellPage(CFG)).toContain('<iframe id="nh-frame" src="/"');
-  });
-
-  it("suppressesOverlay is true only for a request carrying the flag", () => {
-    expect(suppressesOverlay(`/?${NO_OVERLAY_PARAM}=1`)).toBe(true);
-    expect(suppressesOverlay(`/some/route?a=1&${NO_OVERLAY_PARAM}=1`)).toBe(true);
-    expect(suppressesOverlay("/")).toBe(false);
-    expect(suppressesOverlay("/?other=1")).toBe(false);
-    expect(suppressesOverlay(undefined)).toBe(false);
-    // A route literally named like the flag but without the query separator must NOT match.
-    expect(suppressesOverlay(`/${NO_OVERLAY_PARAM}=1`)).toBe(false);
   });
 });
 

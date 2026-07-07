@@ -53,9 +53,10 @@ describe("embedded mode through the proxy", () => {
     const res = await fetch(harness.url + "/__nitpicker-harness/build");
     expect(res.status).toBe(200);
     const html = await res.text();
-    // The iframe carries the overlay-suppression flag so the classic in-frame dock isn't double-injected
-    // (the builder pane drives interaction from the parent). See the suppression test below.
-    expect(html).toContain('<iframe id="nh-frame" src="/?__nh_no_overlay=1"');
+    // The iframe loads the app with a PLAIN src — suppression is mode-gated in the proxy (builderPane on ⇒
+    // the classic in-frame overlay is never injected), so no query flag is needed on the src. See the
+    // suppression tests below (including the redirect case).
+    expect(html).toContain('<iframe id="nh-frame" src="/"');
     expect(html).toContain('id="nh-transcript"');
     expect(html).toContain("/__nitpicker-harness/build.js");
     expect(html).toContain("session=embed");
@@ -83,24 +84,15 @@ describe("embedded mode through the proxy", () => {
     expect(body.running).toBe(false);
   });
 
-  it("does NOT inject the classic overlay into the builder pane's iframe (no double UI)", async () => {
-    // The builder iframe loads the app with the suppression flag → clean preview, sole interface is the pane.
-    const res = await fetch(harness.url + "/?__nh_no_overlay=1");
+  it("does NOT inject the classic overlay into ANY app page (mode-gated, no double UI)", async () => {
+    // Embedded harness (builderPane on) ⇒ every app request is suppressed, with NO query flag. A PLAIN `/`
+    // request must come back overlay-free (the builder pane is the sole interface).
+    const res = await fetch(harness.url + "/");
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain("<h1>app</h1>");
     expect(html).not.toContain('data-nitpicker-harness="overlay"');
     expect(html).not.toContain("/__nitpicker-harness/overlay.js");
-  });
-
-  it("STILL injects the overlay for a direct feedback-proxy request (no regression)", async () => {
-    // No suppression flag → the classic feedback-proxy overlay is injected exactly as before.
-    const res = await fetch(harness.url + "/");
-    expect(res.status).toBe(200);
-    const html = await res.text();
-    expect(html).toContain("<h1>app</h1>");
-    expect(html).toContain('data-nitpicker-harness="overlay"');
-    expect(html).toContain("/__nitpicker-harness/overlay.js");
   });
 
   it("still serves the classic shell + overlay (byte-for-byte additive)", async () => {
@@ -110,4 +102,116 @@ describe("embedded mode through the proxy", () => {
     const overlay = await fetch(harness.url + "/__nitpicker-harness/overlay.js");
     expect(overlay.status).toBe(200);
   }, 30_000);
+});
+
+// The crux of this fix: the previous (query-param) suppression rode only the iframe's initial `src`, so a
+// target that 307-redirects `/`→`/dashboard` (e.g. the Loom shell) dropped the flag and the LANDED page got
+// the classic overlay re-injected — the exact "double UI" bug. Mode-gating (builderPane on ⇒ never inject)
+// makes the LANDED page overlay-free too, because suppression no longer depends on the request URL at all.
+describe("embedded mode keeps redirect + SPA-navigation targets overlay-free", () => {
+  let rtarget: Server;
+  let rharness: Harness;
+  let rgw: AgentGateway;
+
+  beforeAll(async () => {
+    rtarget = createServer((req, res) => {
+      if ((req.url ?? "/").startsWith("/dashboard")) {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end("<html><head></head><body><h1>dashboard</h1></body></html>");
+        return;
+      }
+      // `/` (with any query string) 307-redirects to /dashboard, dropping the query — like the Loom shell.
+      res.writeHead(307, { location: "/dashboard" });
+      res.end();
+    });
+    await new Promise<void>((r) => rtarget.listen(0, "127.0.0.1", r));
+    const port = (rtarget.address() as AddressInfo).port;
+    rgw = new AgentGateway(new NoopBackend(), { cwd: "/tmp/app" });
+    rharness = await startHarness({
+      target: `http://127.0.0.1:${port}`,
+      port: 0 as unknown as number,
+      session: "embed",
+      endpoint: "http://127.0.0.1:5178",
+      log: () => {},
+      mountExtra: rgw.handler,
+      builderPane: true,
+    });
+    rharness.url = `http://127.0.0.1:${(rharness.server.address() as AddressInfo).port}`;
+  }, 30_000);
+
+  afterAll(async () => {
+    await rgw.close();
+    await rharness.close();
+    await new Promise<void>((r) => rtarget.close(() => r()));
+  });
+
+  it("the page LANDED on after a `/`→`/dashboard` redirect has NO overlay", async () => {
+    // `fetch` follows the 307 automatically; the resolved response is the /dashboard page.
+    const res = await fetch(rharness.url + "/");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("<h1>dashboard</h1>");
+    expect(html).not.toContain('data-nitpicker-harness="overlay"');
+    expect(html).not.toContain("/__nitpicker-harness/overlay.js");
+  });
+
+  it("a direct request to the redirect target (SPA/hard-nav) also has NO overlay", async () => {
+    const res = await fetch(rharness.url + "/dashboard");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("<h1>dashboard</h1>");
+    expect(html).not.toContain('data-nitpicker-harness="overlay"');
+  });
+});
+
+// Classic feedback-proxy mode (builderPane OFF — pocketwatcher, membership-management) must be byte-for-byte
+// unchanged: the overlay is STILL injected on every app page, including a redirect target.
+describe("classic feedback-proxy mode still injects the overlay (no regression)", () => {
+  let ctarget: Server;
+  let charness: Harness;
+
+  beforeAll(async () => {
+    ctarget = createServer((req, res) => {
+      if ((req.url ?? "/").startsWith("/dashboard")) {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end("<html><head></head><body><h1>dashboard</h1></body></html>");
+        return;
+      }
+      res.writeHead(307, { location: "/dashboard" });
+      res.end();
+    });
+    await new Promise<void>((r) => ctarget.listen(0, "127.0.0.1", r));
+    const port = (ctarget.address() as AddressInfo).port;
+    // No builderPane / mountExtra → the classic feedback-proxy harness.
+    charness = await startHarness({
+      target: `http://127.0.0.1:${port}`,
+      port: 0 as unknown as number,
+      session: "classic",
+      endpoint: "http://127.0.0.1:5178",
+      log: () => {},
+    });
+    charness.url = `http://127.0.0.1:${(charness.server.address() as AddressInfo).port}`;
+  }, 30_000);
+
+  afterAll(async () => {
+    await charness.close();
+    await new Promise<void>((r) => ctarget.close(() => r()));
+  });
+
+  it("injects the overlay on a plain page", async () => {
+    const res = await fetch(charness.url + "/dashboard");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("<h1>dashboard</h1>");
+    expect(html).toContain('data-nitpicker-harness="overlay"');
+    expect(html).toContain("/__nitpicker-harness/overlay.js");
+  });
+
+  it("injects the overlay on the page landed on after a redirect", async () => {
+    const res = await fetch(charness.url + "/");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("<h1>dashboard</h1>");
+    expect(html).toContain('data-nitpicker-harness="overlay"');
+  });
 });
