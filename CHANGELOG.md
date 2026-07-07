@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Override per session with `--system-prompt <file>`, the `systemContext` option, or the
   `NITPICKER_HARNESS_SYSTEM_PROMPT` env var (explicit value wins over the env var, which wins over the
   default).
+- **Builder-pane rapid-iteration UX** — the embedded builder pane gains a per-mark annotate popup (add a
+  note and **Queue**, or Esc/Cancel to discard), persist-selection-until-commit (the red box + a dimmed
+  preview backdrop stay up while annotating), the classic queue UX at parity (expandable queued marks with
+  the red-boxed region screenshot, a full-screen lightbox, remove, and a count), a composer queueing model
+  (**Enter** stages a message, **⌘/Ctrl+Enter** flushes the whole queue as one turn, **Shift+Enter**
+  newlines), sent-turn history (flushed batches persist as expandable transcript entries above the reply),
+  and sanitized, stream-safe **markdown** agent replies. Builder-pane only — the classic shell /
+  feedback-proxy / sidecar / `poll` paths are unchanged.
 - Open-source governance: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue/PR templates,
   Dependabot config, and CI/license badges in the README.
 
@@ -37,6 +45,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   classic (non-overlay) scrollbars; a no-op under 0-width overlay scrollbars.
 - **Region selection visual persists while composing** — the dim bands + red outline now stay on screen
   after mouse-up until the queue card is committed or dismissed, so the framed region stays visible.
+- **Region capture supports modern CSS colors** — the rasterizer swapped `html2canvas` → `html2canvas-pro`
+  (an API-compatible drop-in fork), so `oklab()`/`oklch()`/`color()` values (reached via `color-mix()` and
+  modern design tokens) no longer throw `Attempting to parse an unsupported color function oklab` mid-capture.
+- **Icon fonts no longer rasterize as tofu boxes** — region screenshots taken from the builder/shell (which
+  raster a *different* document than the ambient one via the `Env` seam) now embed the source document's
+  `@font-face` bytes into the drawing document before capture (`embedFontsForCapture`), so self-hosted icon
+  webfonts (e.g. `@loom/ds`'s Phosphor PUA glyphs) render instead of □.
+- **Overlay suppression is mode-gated** — in embedded/builder mode the classic in-frame overlay is never
+  injected (the builder pane is the sole UI), replacing an earlier per-request query flag that re-injected on
+  redirects / SPA navigation. Classic feedback-proxy / shell mode injects exactly as before.
 
 ## [0.1.0]
 

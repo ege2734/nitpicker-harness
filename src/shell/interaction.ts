@@ -14,7 +14,7 @@ import { baseDescriptor } from "../../vendor/nitpicker/core/elements";
 import type { Env } from "../../vendor/nitpicker/core/env";
 import { resolveReactElement } from "../../vendor/nitpicker/react/react-source";
 import type { ElementDescriptor, QueueItem, Rect, Viewport } from "../../vendor/nitpicker/core/types";
-import { dragBox, elementRectInParent, parentPointToIframe } from "./geometry";
+import { dragBox, elementRectInParent, parentPointToIframe, type ParentBox } from "./geometry";
 
 export type Mode = "cursor" | "region" | "element" | "edit";
 
@@ -22,8 +22,10 @@ export type Mode = "cursor" | "region" | "element" | "edit";
 export interface InteractionSink {
   /** Consume + clear the compose note to attach to the next pick (or "" for none). */
   takeNote(): string;
-  /** A completed mark. For `region`, `_pending` is attached and resolves when the raster is ready. */
-  onMark(item: QueueItem): void;
+  /** A completed mark. For `region`, `_pending` is attached and resolves when the raster is ready. `anchor`
+   *  is the mark's selection rect in PARENT-viewport coords (region drag box / element/edit highlight box),
+   *  best-effort — a host can use it to place a per-mark annotate popup near the selection. */
+  onMark(item: QueueItem, anchor?: ParentBox): void;
   /** Drop a mark the host is already showing (a region whose capture failed). */
   removeMark(id: string): void;
   /** Status line for the host chrome. */
@@ -82,6 +84,13 @@ export class InteractionLayer {
   private highlightLabel!: HTMLElement;
   private dragLayer!: HTMLElement;
   private dragOutline!: HTMLElement;
+  // Persistent selection visual (red box + dimmed backdrop over the rest of the preview) — shown while a
+  // host's per-mark annotate popup is open, so the user sees exactly what they framed while composing the
+  // note. Cleared only on commit/discard (see showSelection/clearSelection). Builder-pane only in practice;
+  // the classic shell queues on release and never calls these.
+  private selectionDim!: HTMLElement;
+  private selectionBox!: HTMLElement;
+  private selectionAnchor: ParentBox | null = null;
 
   // element-picker + drag state
   private hoverTarget: Element | null = null;
@@ -118,6 +127,7 @@ export class InteractionLayer {
     window.addEventListener("resize", () => {
       if (this.mode === "region") this.fitDragLayer();
       this.repositionHighlight();
+      this.positionSelection();
     });
     // A navigation inside the iframe swaps its document: re-arm the active mode against the new one.
     this.frame?.addEventListener("load", () => this.onFrameLoad());
@@ -151,13 +161,64 @@ export class InteractionLayer {
     drag.appendChild(outline);
     drag.addEventListener("mousedown", this.onDragStart);
 
+    // Persistent selection visual (ported from the classic overlay's dim bands + red outline, which stay on
+    // screen "until commit"): a container clipped to the iframe rect (overflow:hidden) holding a red box whose
+    // huge box-shadow spread dims everything OUTSIDE it — a single-element "dim backdrop with a hole" that the
+    // overflow clip keeps inside the preview (never over the chat rail). Sits just below the annotate popup.
+    const dim = document.createElement("div");
+    dim.id = "nh-selection";
+    dim.style.cssText =
+      "position:fixed;display:none;pointer-events:none;overflow:hidden;z-index:2147483000;";
+    const selBox = document.createElement("div");
+    selBox.style.cssText =
+      "position:absolute;box-sizing:border-box;border:2px solid #ff3b30;border-radius:2px;" +
+      "box-shadow:0 0 0 9999px rgba(0,0,0,.45);";
+    dim.appendChild(selBox);
+
     layer.append(drag, hl);
-    document.body.appendChild(layer);
+    document.body.append(layer, dim);
     this.overlayLayer = layer;
     this.highlightBox = hl;
     this.highlightLabel = label;
     this.dragLayer = drag;
     this.dragOutline = outline;
+    this.selectionDim = dim;
+    this.selectionBox = selBox;
+  }
+
+  // ---- persistent selection visual (host-driven: shown while an annotate popup is open) ----
+  /** Show the red selection box + dimmed backdrop over the preview at `anchor` (parent-viewport rect), and
+   *  keep it until {@link clearSelection}. No-op without an anchor/frame. Used by the builder pane so the
+   *  user sees exactly what they framed while typing the note (the classic "persist selection until commit").*/
+  showSelection(anchor?: ParentBox): void {
+    if (!anchor || !this.frame) return;
+    this.selectionAnchor = anchor;
+    this.positionSelection();
+    this.selectionDim.style.display = "block";
+  }
+
+  /** Tear down the persistent selection visual (called on Queue/Cancel — the commit/discard boundary). */
+  clearSelection(): void {
+    this.selectionAnchor = null;
+    this.selectionDim.style.display = "none";
+  }
+
+  private positionSelection(): void {
+    const anchor = this.selectionAnchor;
+    if (!anchor || !this.frame) return;
+    const f = this.frame.getBoundingClientRect();
+    Object.assign(this.selectionDim.style, {
+      left: `${f.left}px`,
+      top: `${f.top}px`,
+      width: `${f.width}px`,
+      height: `${f.height}px`,
+    });
+    Object.assign(this.selectionBox.style, {
+      left: `${anchor.left - f.left}px`,
+      top: `${anchor.top - f.top}px`,
+      width: `${anchor.width}px`,
+      height: `${anchor.height}px`,
+    });
   }
 
   // ---- mode state machine ----
@@ -300,6 +361,8 @@ export class InteractionLayer {
   private onDragStart = (e: MouseEvent): void => {
     if (this.mode !== "region" || !this.frame) return;
     e.preventDefault();
+    // A fresh drag supersedes any lingering persistent selection from a prior (unresolved) mark.
+    this.clearSelection();
     this.dragFrame = this.frame.getBoundingClientRect();
     this.dragStart = { x: e.clientX, y: e.clientY };
     this.dragOutline.style.display = "block";
@@ -343,7 +406,9 @@ export class InteractionLayer {
     const capture = captureRegion(rect, scale, dummyHost, env.win.innerWidth, env).then(
       ({ blob, thumb }) => ({ blob, thumb }),
     );
-    this.enqueueRegion(rect, capture);
+    // The drag box in PARENT-viewport coords — the anchor for a per-mark annotate popup.
+    const anchor = dragBox(start.x, start.y, e.clientX, e.clientY);
+    this.enqueueRegion(rect, capture, anchor);
   };
 
   private updateDragOutline(curX: number, curY: number): void {
@@ -369,17 +434,25 @@ export class InteractionLayer {
   private enqueueElement(target: Element): void {
     const descriptor = { ...baseDescriptor(target), ...resolveReactElement(target) };
     const { href, route } = iframeLocation(this.frame);
-    this.sink.onMark({
-      id: uuid(),
-      kind: "element",
-      text: this.sink.takeNote(),
-      pageUrl: href,
-      route,
-      viewport: frameViewport(this.frame),
-      timestamp: new Date().toISOString(),
-      element: descriptor,
-    });
+    const anchor = this.frame
+      ? elementRectInParent(target.getBoundingClientRect(), this.frame.getBoundingClientRect())
+      : undefined;
+    // setStatus first, onMark last — so a host that opens an annotate popup in onMark has the final say
+    // over the status line (the shell just clears it; behavior is unchanged there).
     this.sink.setStatus("");
+    this.sink.onMark(
+      {
+        id: uuid(),
+        kind: "element",
+        text: this.sink.takeNote(),
+        pageUrl: href,
+        route,
+        viewport: frameViewport(this.frame),
+        timestamp: new Date().toISOString(),
+        element: descriptor,
+      },
+      anchor,
+    );
     this.setMode("cursor");
   }
 
@@ -448,30 +521,46 @@ export class InteractionLayer {
       this.sink.setStatus("");
       return;
     }
-    this.enqueueTextEdit(descriptor, oldText, newText);
+    const anchor = this.frame
+      ? elementRectInParent(el.getBoundingClientRect(), this.frame.getBoundingClientRect())
+      : undefined;
+    this.enqueueTextEdit(descriptor, oldText, newText, anchor);
   }
 
-  private enqueueTextEdit(descriptor: ElementDescriptor, oldText: string, newText: string): void {
+  private enqueueTextEdit(
+    descriptor: ElementDescriptor,
+    oldText: string,
+    newText: string,
+    anchor?: ParentBox,
+  ): void {
     const { href, route } = iframeLocation(this.frame);
-    this.sink.onMark({
-      id: uuid(),
-      kind: "text-edit",
-      text: this.sink.takeNote(),
-      pageUrl: href,
-      route,
-      viewport: frameViewport(this.frame),
-      timestamp: new Date().toISOString(),
-      element: descriptor,
-      oldText,
-      newText,
-    });
+    // setStatus first, onMark last — see enqueueElement: a host opening an annotate popup owns the status.
     this.sink.setStatus(
       descriptor.source ? `Text edit queued · ${descriptor.source}` : "Text edit queued",
       "ok",
     );
+    this.sink.onMark(
+      {
+        id: uuid(),
+        kind: "text-edit",
+        text: this.sink.takeNote(),
+        pageUrl: href,
+        route,
+        viewport: frameViewport(this.frame),
+        timestamp: new Date().toISOString(),
+        element: descriptor,
+        oldText,
+        newText,
+      },
+      anchor,
+    );
   }
 
-  private enqueueRegion(rect: Rect, capture: Promise<{ blob: Blob; thumb: string }>): void {
+  private enqueueRegion(
+    rect: Rect,
+    capture: Promise<{ blob: Blob; thumb: string }>,
+    anchor?: ParentBox,
+  ): void {
     const { href, route } = iframeLocation(this.frame);
     const item: QueueItem = {
       id: uuid(),
@@ -483,7 +572,8 @@ export class InteractionLayer {
       timestamp: new Date().toISOString(),
       image: { mime: "image/png", hasRedBox: true, selectionRect: rect },
     };
-    this.sink.onMark(item);
+    this.sink.setStatus("");
+    this.sink.onMark(item, anchor);
     item._pending = capture
       .then(({ blob, thumb }) => {
         item._blob = blob;
@@ -498,7 +588,6 @@ export class InteractionLayer {
         item._pending = undefined;
         this.sink.onCaptureSettled();
       });
-    this.sink.setStatus("");
     this.setMode("cursor");
   }
 }

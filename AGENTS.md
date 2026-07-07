@@ -18,7 +18,7 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   (`selfHandleResponse`), `X-Frame-Options`/CSP relaxation, absolute-URL rewrite, and **WebSocket
   upgrade forwarding** (HMR). Assets/HMR pass through; only `text/html` is buffered+rewritten.
 - `src/overlay/entry.ts` + `build.ts` — the browser overlay entry (calls the reused `Nitpicker.mount()`)
-  bundled by **esbuild** into one IIFE with html2canvas inlined, served at
+  bundled by **esbuild** into one IIFE with html2canvas-pro inlined, served at
   `/__nitpicker-harness/overlay.js`. Config (session/endpoint) rides on the script URL's query string —
   no inline script, so a strict `script-src 'self'` still runs it.
 - `src/shell/entry.ts` + `build.ts` — the **builder-shell** mode (viability report §6 / Phase 1), a
@@ -117,21 +117,103 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
     (`src/builder/entry.ts`) swaps in the gateway client (`src/builder/client.ts`) + a streaming transcript.
     `src/builder/{entry,build}.ts` + `inject.ts:builderPage()` serve the new `/__nitpicker-harness/build[.js]`
     pane (sibling of the shell). Extraction is behavior-preserving — guarded by `tests/interaction.test.ts`
-    + the unchanged `tests/shell-geometry.test.ts` / vendor `env-seam.test.ts`.
-  - **Overlay-suppression seam (no double UI):** the embedded builder pane drives element-pick / region /
-    inline-edit from the PARENT against its iframe (the reused `InteractionLayer`/`Env` seam), so injecting
-    the classic in-frame overlay dock+queue would be a redundant SECOND feedback UI over the same preview.
-    `builderPage()` therefore loads its iframe as `src="/?__nh_no_overlay=1"` (the `NO_OVERLAY_PARAM` flag in
-    `inject.ts`); `server.ts`'s `proxyRes` HTML path calls `suppressesOverlay(req.url)` and **skips**
-    `injectOverlay` when the flag is present. The flag is internal to `builderPage()`. **Direct app requests
-    (feedback-proxy mode) and the classic shell iframe (`src="/"`) never carry it → overlay injected exactly
-    as before** — byte-for-byte unchanged. NOTE the flag rides the INITIAL iframe `src` only: a full-page
-    navigation the app itself drives (a hard link to another route) re-requests HTML without it and would
-    re-inject; the live builder flow is HMR-driven (module patches, no navigation) so the preview stays
-    clean in practice. The classic **shell** (`/shell`) has the same in-frame-overlay redundancy but is left
-    unchanged here (preserved, not regressed); flip its iframe `src` the same way if that's ever wanted.
-    Guarded by `tests/inject.test.ts` (`suppressesOverlay` + `builderPage` flag) and `tests/proxy-embed.test.ts`
-    (through the real proxy: suppressed request has no overlay `<script>`, direct request still does).
+    + the unchanged `tests/shell-geometry.test.ts` / vendor `env-seam.test.ts`. **`InteractionSink.onMark`
+    takes an optional `anchor?: ParentBox`** — the mark's selection rect in PARENT-viewport coords (region
+    drag box / element+edit highlight box), so a host can place a per-mark popup near the selection. The
+    layer sets status BEFORE calling `onMark` on all three producers (element/region/text-edit) so the host's
+    `onMark` has the final word on the status line; the shell just clears it (unchanged), the builder uses it.
+  - **Per-mark annotate popup (builder-pane only) — `src/builder/annotate.ts`.** The extracted
+    `InteractionLayer` originally had `BuilderChrome.onMark` **silently** auto-attach every mark to the
+    composer. That dropped the classic feedback-overlay confirm step, so the user never got to annotate or
+    reject a mark. `BuilderChrome.onMark` now opens an `AnnotationPopup` near the mark's `anchor`: a note
+    input + **Queue** (confirm → `item.text = note`, push to `pendingMarks`, render the chip) / **Cancel**
+    (Esc or button → **discard**, never queued). Enter confirms, empty note is allowed (optional). It's a
+    single-instance parent-window popup with self-contained inline styles (dark builder chrome), so it needs
+    no server-rendered markup. **The classic shell keeps its silent auto-queue** (`ShellChrome.onMark` just
+    pushes) — the popup is builder-only. Region marks show the popup while the html2canvas raster runs in the
+    background; discarding a region just orphans the in-flight capture (never pushed → the late
+    `removeMark(id)` on a capture failure is a harmless no-op). Guarded by `tests/annotate.test.ts`
+    (confirm-attaches / cancel-discards / Esc / single-instance).
+  - **Persist-selection-until-commit (`InteractionLayer.showSelection`/`clearSelection`).** Ported from the
+    classic overlay's dim-bands + red-outline "persist until commit": while the annotate popup is open the
+    red selection box + a **dimmed backdrop over the preview** stay visible so the user sees exactly what they
+    framed. Implemented as a `#nh-selection` container clipped to the iframe rect (`overflow:hidden`) holding
+    a red box whose `box-shadow:0 0 0 9999px rgba(0,0,0,.45)` dims everything OUTSIDE it — a single-element
+    "dim with a hole", clipped so it never covers the chat rail; it sits just below the popup. `BuilderChrome`
+    drives it: `onMark` calls `showSelection(anchor)` (after `annotate.open`, which resolves any prior popup →
+    its `onCancel` → `clearSelection`); confirm/cancel call `clearSelection`. A fresh region drag also clears
+    it. The shell never calls these (it queues on release). Guarded by `tests/interaction.test.ts`.
+  - **Ported queued-mark UX at parity — `src/builder/queue.ts` (`buildQueueItem`).** The builder shipped a
+    minimal chip bar; this ports the classic prior art: the per-kind row (region/element/text-edit + source
+    chip + note preview + remove) mirrors `ShellChrome.render()`, and the **expandable detail** — click a row
+    to reveal the **red-boxed region SCREENSHOT** (full-res `_blob` object URL → `_thumb` data URL →
+    "capturing…/failed" placeholder) or the element/text-edit descriptor lines (component/source/selector/
+    testid/tag), plus a live-editable note — is ported from the overlay item modal (`openItemModal` +
+    `fillRegionBody`). `BuilderChrome.renderMarks` renders a scrollable column list with a count header,
+    tracks a single `expandedId`, and revokes region object URLs before each re-render. **It stays on the
+    live-SSE-agent sink** — marks + notes attach to the agent turn over the Agent Gateway; only the
+    queue/annotation UI was ported, NOT the sidecar/poll destination. Guarded by `tests/queue.test.ts`.
+    Three follow-ons layer on this: (a) **region screenshot lightbox** (`src/builder/lightbox.ts`) — clicking
+    an expanded region preview opens the FULL-res `_blob` (→ `_thumb` fallback) full-screen over a dim
+    backdrop; Esc / backdrop-click closes and the full-size object URL is revoked (the rail preview itself
+    uses the leak-free `_thumb`); single-instance; `tests/lightbox.test.ts`. (b) **Enter-to-save on a queued
+    note** — the expanded item's note textarea commits on Enter (→ `onNoteChange` + collapse), Esc cancels
+    (prior note kept — edits are NOT live-applied), Shift+Enter newlines; mirrors the classic modal's Save.
+    (c) **Composer queueing model** (`src/builder/compose.ts`, pure) — `classifyComposerKey`: **Enter** stages
+    the typed text as a `"message"` `QueueItem` into the SAME queue (no send), **Cmd/Ctrl+Enter** flushes the
+    whole queue as one turn, **Shift+Enter** newlines; the Send button flushes. `partitionQueue` is the
+    grouping decision (the steer's open judgment call): queued `message` items join in order into the turn's
+    typed `text`, non-message marks ride as `marks` — exactly the shape `formatTurn` composes (text leads,
+    marks as context). Flush first folds any un-staged composer text in, so a single quick message still sends
+    in one ⌘↵ gesture. `tests/compose.test.ts`. The classic **shell** composer (Enter=queue via `queueMessage`)
+    is unchanged.
+  - **Sent-turn history + markdown agent replies (builder pane).** (1) **Sent-turn history** — flush no
+    longer fires-and-clears: `BuilderChrome.appendSentTurn` records the flushed batch as an expandable entry
+    in the transcript (above the streamed reply). `buildSentTurn` (in `queue.ts`) renders a collapsed summary
+    (lead text + kind/count badge, e.g. "2 marks · 1 message") that expands to each item as a **read-only**
+    queued item (`buildQueueItem(..., { readonly: true })` — no remove, no note textarea; note shown
+    statically), including the red-boxed region screenshot with **click-to-lightbox**. The batch's item
+    objects are retained (with `_thumb`/`_blob`) so screenshots render later; memory is bounded by
+    `pruneSentBlobs` (full-res `_blob` kept for the most recent `FULLRES_TURNS`=10 turns, older drop it and
+    fall back to the always-kept `_thumb`). No object URLs are created for previews (thumbs are data URLs), so
+    nothing leaks on flush — the lightbox revokes its own on close. `tests/queue.test.ts` (`buildSentTurn`).
+    (2) **Markdown agent replies** (`src/builder/markdown.ts`) — assistant messages render as sanitized
+    markdown into a `.nh-md` container instead of raw text. `renderMarkdownInto` builds DOM with
+    createElement/textContent (never innerHTML) + scheme-checked links, so agent output can't inject HTML/XSS;
+    it's STREAM-SAFE (re-parses the accumulated string per token, coalesced to one paint/frame via rAF;
+    unterminated fences / half-typed `**bold` degrade gracefully) and dependency-light (no new deps). Emphasis
+    is `*`-only (never `_`) so `file_line_col` paths aren't mangled, and a **soft** line break (single wrapped
+    newline) renders as a SPACE, not `<br>` (else "wired.\nCSS" → "wired.CSS", dropping the inter-word space);
+    a hard break (two trailing spaces / backslash) is still `<br>`. `.nh-md` styles live in `builderPage()`;
+    `tests/markdown.test.ts`. User messages stay plain. Classic shell chat unchanged.
+  - **Region-capture icon fonts (tofu-box fix) — the html2canvas cross-document trap.** Region screenshots
+    rasterized self-hosted icon webfonts (e.g. `@loom/ds`'s Phosphor font) as tofu boxes (□) even though the
+    live app was fine. html2canvas draws text with the **ambient** document's fonts, but the builder/shell
+    path rasterizes a **different** document (the proxied iframe via the `Env` seam) — so the iframe's icon
+    `@font-face` is absent from the drawing document. `await document.fonts.ready` is necessary but NOT
+    sufficient (the font is loaded — in the WRONG document). `vendor/nitpicker/core/region.ts`
+    `embedFontsForCapture` reads the source doc's `@font-face` rules, fetches the bytes (same-origin under the
+    proxy), and `FontFace`-loads them into the drawing doc (`hostEl.ownerDocument`) before capturing. **Found +
+    fixed via a real browser loop** (Playwright + a synthetic PUA icon font + an iframe repro) — see
+    `tests/fixtures/icon-capture/`; DON'T iterate this blind on unit tests alone (a same-document unit test
+    passes while the cross-document case tofus). Guarded by `vendor/nitpicker/tests/region-fontembed.test.ts`.
+  - **Overlay-suppression is MODE-gated (no double UI):** the embedded builder pane drives element-pick /
+    region / inline-edit from the PARENT against its iframe (the reused `InteractionLayer`/`Env` seam), so
+    injecting the classic in-frame overlay dock+queue would be a redundant SECOND feedback UI over the same
+    preview. `server.ts` therefore gates injection on the **mode**, not the request: `startHarness` computes
+    `injectClassicOverlay = !opts.builderPane` once, and the `proxyRes` HTML path injects **only** when it's
+    true. So in EMBEDDED/BUILDER mode (`builderPane` on) the classic overlay is **never** injected into any app
+    page; in classic feedback-proxy / shell mode (`builderPane` off) it's injected exactly as before —
+    byte-for-byte unchanged. The builder iframe loads a **plain** `src="/"` (no query flag). **Why mode-gating,
+    not the earlier per-request query flag (#22):** the `?__nh_no_overlay=1` flag rode only the iframe's INITIAL
+    `src`, so a target that 307-redirects `/`→`/dashboard` (e.g. the Loom shell) — or any SPA/full-page
+    navigation — dropped the flag and the LANDED page got the overlay re-injected (the exact double-UI bug).
+    Mode-gating doesn't depend on the request URL at all, so every app request through an embedded harness is
+    suppressed, redirects and navigations included. The classic **shell** (`/shell`) still gets the in-frame
+    overlay (it runs with `builderPane` off; preserved, not regressed). Guarded by `tests/inject.test.ts`
+    (`builderPage` plain src) and `tests/proxy-embed.test.ts` (through the real proxy: embedded mode has no
+    overlay `<script>` on a plain page NOR on a `/`→`/dashboard` redirect target; classic mode still injects on
+    both).
 
   The **load-bearing reuse**: the agent edits real source files → the app's own HMR (already forwarded
   through the proxy) reloads the iframe. No preview-refresh channel is built; chat + live preview stay in
@@ -309,7 +391,7 @@ deps are present there; only a real out-of-repo prod install exposes it (hence `
   vendored transport, spawned as `node dist/sidecar.js`) — plus three self-contained **browser** IIFEs
   under `dist/browser/{overlay,shell,builder}.js`. Server bundles use `packages:"external"`, so the only
   runtime `dependency` is **`http-proxy`**; the Claude Agent SDK stays an `import(SDK_MODULE)` runtime
-  optional dep; `esbuild`/`html2canvas` moved to **devDependencies** (build-only).
+  optional dep; `esbuild`/`html2canvas-pro` moved to **devDependencies** (build-only).
 - `tsc -p tsconfig.build.json` emits `.d.ts` into `dist/types/**` (rootDir `.`), so `package.json`
   `types` → `dist/types/src/index.d.ts`. This is the typed surface **Loom pins**.
 - `package.json`: `main`/`exports` → `./dist/index.js`, `types` → `./dist/types/src/index.d.ts`, `bin`

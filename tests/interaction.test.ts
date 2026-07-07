@@ -81,4 +81,24 @@ describe("InteractionLayer extraction", () => {
     layer.setMode("region");
     expect(activeMode()).toBe("nh-mode-region");
   });
+
+  it("showSelection renders the persistent red box + dim, clearSelection hides it", () => {
+    const layer = new InteractionLayer(makeSink());
+    const sel = document.getElementById("nh-selection") as HTMLElement;
+    expect(sel).not.toBeNull();
+    expect(sel.style.display).toBe("none"); // hidden until a mark shows it
+    layer.showSelection({ left: 10, top: 20, width: 100, height: 40 });
+    expect(sel.style.display).toBe("block");
+    // the inner box carries a huge box-shadow spread — the "dim backdrop with a hole"
+    const box = sel.firstElementChild as HTMLElement;
+    expect(box.style.boxShadow).toContain("9999px");
+    layer.clearSelection();
+    expect(sel.style.display).toBe("none");
+  });
+
+  it("showSelection without an anchor is a no-op (never throws)", () => {
+    const layer = new InteractionLayer(makeSink());
+    layer.showSelection(undefined);
+    expect((document.getElementById("nh-selection") as HTMLElement).style.display).toBe("none");
+  });
 });

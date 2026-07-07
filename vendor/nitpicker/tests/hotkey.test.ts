@@ -18,7 +18,7 @@ const html2canvas = vi.fn(
     return canvas;
   },
 );
-vi.mock("html2canvas", () => ({ default: html2canvas }));
+vi.mock("html2canvas-pro", () => ({ default: html2canvas }));
 
 import { Nitpicker } from "../core";
 import type { NitpickerHandle } from "../core";

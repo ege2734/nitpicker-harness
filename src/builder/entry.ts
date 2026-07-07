@@ -8,9 +8,19 @@
 // Config (session + sidecar endpoint) rides this script's own <script src> query string — read
 // SYNCHRONOUSLY at module load (currentScript is only non-null then; see AGENTS.md).
 import type { QueueItem } from "../../vendor/nitpicker/core/types";
-import { InteractionLayer, type InteractionSink } from "../shell/interaction";
+import {
+  InteractionLayer,
+  frameViewport,
+  iframeLocation,
+  type InteractionSink,
+} from "../shell/interaction";
+import type { ParentBox } from "../shell/geometry";
 import type { AgentEvent } from "../agent/backend";
 import { AgentGatewayClient } from "./client";
+import { AnnotationPopup, annotateLabel } from "./annotate";
+import { buildQueueItem, buildSentTurn } from "./queue";
+import { classifyComposerKey, partitionQueue } from "./compose";
+import { renderMarkdownInto } from "./markdown";
 
 function readConfig(): { session: string; endpoint: string } {
   const fallback = { session: "nitpicker", endpoint: "http://127.0.0.1:5178" };
@@ -30,11 +40,21 @@ function readConfig(): { session: string; endpoint: string } {
 
 class BuilderChrome implements InteractionSink {
   private readonly client: AgentGatewayClient;
+  private readonly annotate = new AnnotationPopup();
+  private readonly interaction: InteractionLayer;
   private pendingMarks: QueueItem[] = [];
+  private expandedId: string | null = null;
   private sending = false;
   private busy = false;
   private currentAssistant: HTMLElement | null = null;
-  private currentAssistantText: Text | null = null;
+  // Streaming assistant reply rendered as markdown: accumulate the raw string and re-render into `.nh-md`.
+  private currentMdEl: HTMLElement | null = null;
+  private currentMd = "";
+  private mdScheduled = false;
+  // Sent-turn history: the flushed batches, retained so their marks' _thumb/_blob render the screenshots
+  // later. Full-res _blob is kept only for the most recent FULLRES_TURNS turns (older keep just the thumb).
+  private readonly sentTurns: { id: string; items: QueueItem[] }[] = [];
+  private static readonly FULLRES_TURNS = 10;
 
   private readonly transcriptEl = document.getElementById("nh-transcript") as HTMLElement;
   private readonly marksEl = document.getElementById("nh-marks") as HTMLElement;
@@ -46,8 +66,9 @@ class BuilderChrome implements InteractionSink {
 
   constructor(session: string, endpoint: string) {
     this.client = new AgentGatewayClient(session, endpoint);
-    // Interaction layer produces marks; its sink is `this`.
-    new InteractionLayer(this);
+    // Interaction layer produces marks; its sink is `this`. Kept so we can drive the persistent selection
+    // visual (red box + dim backdrop) while an annotate popup is open.
+    this.interaction = new InteractionLayer(this);
     this.wire();
     this.renderMarks();
     void this.hydrate();
@@ -58,12 +79,36 @@ class BuilderChrome implements InteractionSink {
     // In embedded mode the composer text IS the turn message; marks carry only their descriptor.
     return "";
   }
-  onMark(item: QueueItem): void {
-    this.pendingMarks.push(item);
-    this.renderMarks();
+  onMark(item: QueueItem, anchor?: ParentBox): void {
+    // Restore the classic per-mark confirm/annotate step: instead of silently auto-attaching, open a popup
+    // near the selection so the user can add a note and confirm — or discard the mark entirely (Esc/Cancel).
+    // The persistent selection visual (red box + dimmed backdrop, classic "persist until commit") stays up the
+    // whole time the popup is open. `open()` first resolves any prior popup (→ its onCancel → clearSelection),
+    // so show the NEW selection AFTER opening.
+    this.annotate.open(
+      anchor,
+      {
+        onConfirm: (note) => {
+          item.text = note;
+          this.pendingMarks.push(item);
+          this.interaction.clearSelection();
+          this.renderMarks();
+          this.setStatus(note ? "Mark attached." : "Mark attached (no note).", "ok");
+        },
+        onCancel: () => {
+          // Never pushed to pendingMarks, so nothing to remove; any in-flight region raster just resolves
+          // into an orphaned item that's GC'd. removeMark(id) on a late capture failure is a harmless no-op.
+          this.interaction.clearSelection();
+          this.setStatus("Mark discarded.");
+        },
+      },
+      { label: annotateLabel(item.kind) },
+    );
+    this.interaction.showSelection(anchor);
   }
   removeMark(id: string): void {
     this.pendingMarks = this.pendingMarks.filter((i) => i.id !== id);
+    if (this.expandedId === id) this.expandedId = null;
     this.renderMarks();
   }
   onCaptureSettled(): void {
@@ -92,20 +137,53 @@ class BuilderChrome implements InteractionSink {
   }
 
   private wire(): void {
-    this.sendBtn.addEventListener("click", () => void this.send());
+    // The Send button flushes the whole queue (typed messages + marks) as one turn.
+    this.sendBtn.addEventListener("click", () => void this.flush());
     this.stopBtn.addEventListener("click", () => void this.client.interrupt());
+    // Composer submit semantics: Enter → queue the typed text (stage, don't send); Cmd/Ctrl+Enter → flush
+    // the whole queue to the agent; Shift+Enter → newline.
     this.inputEl.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        void this.send();
-      }
+      const action = classifyComposerKey(e);
+      if (!action || action === "newline") return; // Shift+Enter / non-Enter → default (newline)
+      e.preventDefault();
+      if (action === "flush") void this.flush();
+      else this.queueFromComposer();
     });
   }
 
-  private async send(): Promise<void> {
-    if (this.sending || this.busy) return;
+  /** Stage the composer text as a standalone "message" mark in the same queue the picks/regions feed. */
+  private queueFromComposer(): boolean {
     const text = this.inputEl.value.trim();
-    const marks = this.pendingMarks.slice();
+    if (!text) return false;
+    const frame = document.getElementById("nh-frame") as HTMLIFrameElement | null;
+    const { href, route } = iframeLocation(frame);
+    this.pendingMarks.push({
+      id: newId(),
+      kind: "message",
+      text,
+      pageUrl: href,
+      route,
+      viewport: frameViewport(frame),
+      timestamp: new Date().toISOString(),
+    });
+    this.inputEl.value = "";
+    this.renderMarks();
+    this.setStatus("Queued — ⌘↵ to send.");
+    return true;
+  }
+
+  /**
+   * Flush the whole queue to the agent as ONE turn. Any un-queued composer text is queued first (so a single
+   * quick message still sends in one gesture). Grouping (the open judgment call): queued "message" items
+   * become the turn's typed text, joined in order; region/element/text-edit marks ride as `marks` carrying
+   * their file:line / region context — exactly the shape the gateway's formatTurn already composes (typed
+   * text leads, marks follow as context blocks).
+   */
+  private async flush(): Promise<void> {
+    if (this.sending || this.busy) return;
+    this.queueFromComposer(); // fold any un-staged composer text into the queue first
+    const batch = this.pendingMarks.slice(); // the full sent turn (messages + marks) for the history entry
+    const { text, marks } = partitionQueue(batch);
     if (!text && marks.length === 0) return;
     this.sending = true;
     this.updateControls();
@@ -117,10 +195,12 @@ class BuilderChrome implements InteractionSink {
         await Promise.all(pending);
       }
       const uploadable = marks.filter((i) => !(i.kind === "region" && !i._blob));
-      this.appendMessage("user", text, uploadable);
       await this.client.send(text, uploadable);
-      this.inputEl.value = "";
+      // Only after a successful send: persist the sent batch as an expandable history entry (above the
+      // agent's streamed reply) and clear the queue. On failure the queue stays intact for retry.
+      this.appendSentTurn(batch);
       this.pendingMarks = [];
+      this.expandedId = null;
       this.renderMarks();
       this.setStatus("");
     } catch (err) {
@@ -136,18 +216,12 @@ class BuilderChrome implements InteractionSink {
     switch (e.type) {
       case "turn_start":
         this.setBusy(true);
-        this.currentAssistant = this.appendMessage("assistant", "");
-        this.currentAssistantText = document.createTextNode("");
-        this.currentAssistant.appendChild(this.currentAssistantText);
+        this.startAssistant();
         break;
       case "token":
-        if (!this.currentAssistantText) {
-          this.currentAssistant = this.appendMessage("assistant", "");
-          this.currentAssistantText = document.createTextNode("");
-          this.currentAssistant.appendChild(this.currentAssistantText);
-        }
-        this.currentAssistantText.appendData(e.text);
-        this.scrollToEnd();
+        if (!this.currentMdEl) this.startAssistant();
+        this.currentMd += e.text;
+        this.scheduleMarkdownRender();
         break;
       case "tool_use":
         this.appendTool(`▶ ${e.name}`);
@@ -159,8 +233,10 @@ class BuilderChrome implements InteractionSink {
         this.appendTool(`✎ edited ${e.path}`, false, true);
         break;
       case "turn_end":
+        this.renderMarkdownNow(); // flush any pending token render before detaching
         this.currentAssistant = null;
-        this.currentAssistantText = null;
+        this.currentMdEl = null;
+        this.currentMd = "";
         this.setBusy(false);
         break;
       case "error":
@@ -175,11 +251,14 @@ class BuilderChrome implements InteractionSink {
     if (this.transcriptEl.childElementCount) return;
     const empty = document.createElement("div");
     empty.className = "nh-empty";
-    empty.textContent = "Ask the agent to build or change something. Use the mode toolbar to mark the preview.";
+    empty.textContent =
+      "Mark the preview or type a message. Enter queues · ⌘/Ctrl+Enter sends the queue to the agent.";
     this.transcriptEl.appendChild(empty);
   }
 
-  private appendMessage(role: "user" | "assistant", text: string, marks?: QueueItem[]): HTMLElement {
+  /** Append a chat bubble. Assistant text renders as sanitized markdown (into a `.nh-md` container); user
+   *  text stays plain. */
+  private appendMessage(role: "user" | "assistant", text: string): HTMLElement {
     const empty = this.transcriptEl.querySelector(".nh-empty");
     if (empty) empty.remove();
     const row = document.createElement("div");
@@ -188,16 +267,65 @@ class BuilderChrome implements InteractionSink {
     label.className = "nh-role";
     label.textContent = role;
     row.appendChild(label);
-    if (text) row.appendChild(document.createTextNode(text));
-    if (marks && marks.length) {
-      const note = document.createElement("span");
-      note.className = "nh-tool";
-      note.textContent = `+ ${marks.length} mark${marks.length === 1 ? "" : "s"}`;
-      row.appendChild(note);
+    if (role === "assistant") {
+      const md = document.createElement("div");
+      md.className = "nh-md";
+      if (text) renderMarkdownInto(md, text);
+      row.appendChild(md);
+    } else if (text) {
+      row.appendChild(document.createTextNode(text));
     }
     this.transcriptEl.appendChild(row);
     this.scrollToEnd();
     return row;
+  }
+
+  /** Start (or restart) the streaming assistant bubble + its markdown container. */
+  private startAssistant(): void {
+    this.currentAssistant = this.appendMessage("assistant", "");
+    this.currentMdEl = this.currentAssistant.querySelector(".nh-md");
+    this.currentMd = "";
+  }
+
+  /** Coalesce per-token markdown re-renders to one paint per frame (smooth + stream-safe). */
+  private scheduleMarkdownRender(): void {
+    if (this.mdScheduled) return;
+    this.mdScheduled = true;
+    const raf =
+      typeof requestAnimationFrame === "function" ? requestAnimationFrame : (cb: () => void) => setTimeout(cb, 16);
+    raf(() => {
+      this.mdScheduled = false;
+      this.renderMarkdownNow();
+    });
+  }
+
+  private renderMarkdownNow(): void {
+    if (this.currentMdEl) {
+      renderMarkdownInto(this.currentMdEl, this.currentMd);
+      this.scrollToEnd();
+    }
+  }
+
+  /** Persist a flushed batch as an expandable sent-turn entry in the transcript. */
+  private appendSentTurn(items: QueueItem[]): void {
+    this.sentTurns.push({ id: newId(), items });
+    this.pruneSentBlobs();
+    const empty = this.transcriptEl.querySelector(".nh-empty");
+    if (empty) empty.remove();
+    this.transcriptEl.appendChild(buildSentTurn(items));
+    this.scrollToEnd();
+  }
+
+  /** Bound memory: keep the full-res region `_blob` only for the most recent FULLRES_TURNS turns; older
+   *  turns drop it so the Blob can be GC'd (the always-visible `_thumb` data URL stays, and the lightbox
+   *  falls back to it). No object URLs are created here, so there's nothing to leak. */
+  private pruneSentBlobs(): void {
+    const cutoff = this.sentTurns.length - BuilderChrome.FULLRES_TURNS;
+    for (let i = 0; i < cutoff; i++) {
+      for (const it of this.sentTurns[i].items) {
+        if (it.kind === "region" && it._blob) it._blob = undefined;
+      }
+    }
   }
 
   private appendTool(text: string, isError = false, isFile = false): void {
@@ -217,28 +345,45 @@ class BuilderChrome implements InteractionSink {
   }
 
   private renderMarks(): void {
+    // Revoke any full-res object URLs from the previous render (region previews) before rebuilding.
+    this.marksEl.querySelectorAll("img.nh-item-img").forEach((img) => {
+      const s = (img as HTMLImageElement).src;
+      if (s.startsWith("blob:")) URL.revokeObjectURL(s);
+    });
     this.marksEl.textContent = "";
+
+    if (this.pendingMarks.length === 0) {
+      this.marksEl.style.display = "none";
+      return;
+    }
+    // Column list of expandable items (ported parity with the classic shell/overlay queue), with a count.
+    this.marksEl.style.cssText =
+      "display:flex;flex-direction:column;gap:6px;padding:8px 12px;border-top:1px solid #23272e;max-height:42vh;overflow-y:auto;";
+
+    const header = document.createElement("div");
+    header.className = "nh-marks-head";
+    header.textContent = `Queued marks · ${this.pendingMarks.length}`;
+    header.style.cssText = "font-size:10px;letter-spacing:.4px;text-transform:uppercase;color:#6b727c;";
+    this.marksEl.appendChild(header);
+
     for (const item of this.pendingMarks) {
-      const chip = document.createElement("span");
-      chip.className = "nh-chip";
-      const label = document.createElement("span");
-      label.textContent = chipLabel(item);
-      chip.appendChild(label);
-      const src = item.element?.source;
-      if (src) {
-        const s = document.createElement("span");
-        s.className = "nh-src";
-        s.textContent = src;
-        chip.appendChild(s);
-      }
-      const del = document.createElement("button");
-      del.className = "nh-del";
-      del.type = "button";
-      del.setAttribute("aria-label", "Remove mark");
-      del.textContent = "×";
-      del.addEventListener("click", () => this.removeMark(item.id));
-      chip.appendChild(del);
-      this.marksEl.appendChild(chip);
+      this.marksEl.appendChild(
+        buildQueueItem(
+          item,
+          {
+            onRemove: (id) => this.removeMark(id),
+            onToggle: (id) => {
+              this.expandedId = this.expandedId === id ? null : id;
+              this.renderMarks();
+            },
+            onNoteChange: (id, note) => {
+              const it = this.pendingMarks.find((m) => m.id === id);
+              if (it) it.text = note;
+            },
+          },
+          this.expandedId === item.id,
+        ),
+      );
     }
   }
 
@@ -259,17 +404,10 @@ class BuilderChrome implements InteractionSink {
   }
 }
 
-function chipLabel(item: QueueItem): string {
-  switch (item.kind) {
-    case "region":
-      return item._error ? "region ✕" : item._blob ? "region ✓" : "region…";
-    case "element":
-      return item.element?.component ? `⬡ ${item.element.component}` : item.element?.selector ?? "element";
-    case "text-edit":
-      return `✎ “${item.oldText ?? ""}” → “${item.newText ?? ""}”`;
-    default:
-      return "message";
-  }
+function newId(): string {
+  return typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `np-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
 }
 
 const CONFIG = readConfig();

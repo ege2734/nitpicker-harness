@@ -76,3 +76,27 @@ it is **not** upstreamed — preserve it on every re-sync (do NOT blind-copy `re
   and `core/elements.ts` were listed for this pass but are already ambient-free (element/canvas-relative
   math only), so they're reused verbatim — as are `react/react-source.ts` (fiber walk off the passed node).
   Covered by `tests/env-seam.test.ts`. Preserve on re-sync (same rule as the deltas above).
+- **`core/region.ts` — the region rasterizer imports `html2canvas-pro`, not `html2canvas`.** Upstream
+  `html2canvas@1.4.1` cannot parse the modern `oklab()`/`oklch()`/`color()` CSS color functions and throws
+  `Attempting to parse an unsupported color function oklab` mid-capture — those colors reach computed styles
+  via `color-mix()` and modern design tokens (the Loom shell/DS emits them), so region-drag capture failed
+  outright in the builder. `html2canvas-pro` is a maintained, API-compatible drop-in fork that supports
+  oklab/oklch/color(); both dynamic `import(...)` sites in `rasterizeViewport`/`rasterizeFrozen` were
+  switched with no call-site change. The two tests that mock the module (`tests/hotkey.test.ts`,
+  `tests/env-seam.test.ts`) mock `html2canvas-pro`; `cli/verify.ts`'s `html2canvas` prod-leak MARKER still
+  matches (the fork's bundle retains the `html2canvas` substring). Preserve on re-sync.
+- **`core/region.ts` — icon-font capture fix (`ensureFontsReady` + `embedFontsForCapture`).** Region
+  screenshots rasterized self-hosted icon webfonts (e.g. `@loom/ds`'s Phosphor font, PUA glyphs) as the
+  missing-glyph tofu box (□) for every icon while the live app was fine. Two parts, both before every
+  html2canvas call in `rasterizeViewport`/`rasterizeFrozen`: (1) `ensureFontsReady(doc)` force-loads the
+  declared `@font-face`s and awaits the `FontFaceSet` `.ready` (necessary but NOT sufficient); (2)
+  **`embedFontsForCapture(sourceDoc, baseHref, targetDoc)`** — the real fix. html2canvas draws text with the
+  **AMBIENT** document's fonts, but the builder/shell path rasterizes a **different** document (the proxied
+  iframe via the `Env` seam), so the iframe's icon `@font-face` is absent from the drawing document → tofu.
+  It reads the SOURCE doc's `@font-face` rules (`collectFontFaceSpecs`), fetches the bytes (same-origin under
+  the proxy), and `FontFace`-loads them into the DRAWING document (`hostEl.ownerDocument`) before capture,
+  removing them after. Generic (no font-name hardcoding); best-effort (cross-origin/un-fetchable fonts and a
+  missing `FontFace`/`fetch`/jsdom are skipped). Root cause found + fix **visually verified** with a real
+  browser loop — see `tests/fixtures/icon-capture/` (synthetic PUA icon font + iframe repro). Guarded by
+  `tests/region-fonts.test.ts` + `tests/region-fontembed.test.ts` (the cross-document embedding). Preserve on
+  re-sync.

@@ -25,24 +25,14 @@ export const SHELL_JS_PATH = `${HARNESS_PREFIX}/shell.js`;
 // above (and its sidecar/poll consumers) are byte-for-byte unchanged.
 export const BUILD_PATH = `${HARNESS_PREFIX}/build`;
 export const BUILD_JS_PATH = `${HARNESS_PREFIX}/build.js`;
-// Overlay-suppression flag. The embedded BUILDER pane appends it to its iframe `src` so the proxy serves the
-// app WITHOUT the classic feedback overlay injected. In embedded mode the builder pane already drives
-// element-pick / region / inline-edit from the PARENT against this iframe (the reused InteractionLayer/Env
-// seam), so the in-frame overlay dock+queue would be a redundant SECOND feedback UI over the same preview.
-// The flag is internal to `builderPage()`; direct app requests (feedback-proxy mode) never carry it, so they
-// inject exactly as before. NOTE: the flag rides the initial iframe `src` only — a full-page navigation the
-// app itself drives (a hard link to another route) re-requests HTML without it and would re-inject; live
-// builder flow is HMR-driven (module patches, no navigation) so in practice the preview stays clean.
-export const NO_OVERLAY_PARAM = "__nh_no_overlay";
-
-/** True when a proxied request opts out of overlay injection via NO_OVERLAY_PARAM (the builder iframe).
- *  Pure/string-only (takes the raw request URL, relative or absolute) so it stays unit-testable. */
-export function suppressesOverlay(reqUrl: string | undefined): boolean {
-  if (!reqUrl) return false;
-  const q = reqUrl.indexOf("?");
-  if (q === -1) return false;
-  return new URLSearchParams(reqUrl.slice(q + 1)).has(NO_OVERLAY_PARAM);
-}
+// Overlay-suppression is MODE-gated, not per-request: in EMBEDDED/BUILDER mode (server.ts `builderPane` on)
+// the proxy NEVER injects the classic in-frame overlay into the app. The builder pane is the sole interface
+// and already drives element-pick / region / inline-edit from the PARENT against its iframe (the reused
+// InteractionLayer/Env seam), so an injected dock+queue would be a redundant SECOND feedback UI over the same
+// preview. Gating on the mode (not a query flag/cookie on the initial iframe src) is what makes it survive a
+// `/`→`/dashboard` redirect and any SPA/full-page navigation the app drives — every app request through an
+// embedded harness is suppressed, unconditionally. With `builderPane` OFF (classic feedback-proxy / shell)
+// the overlay is injected exactly as before — byte-for-byte unchanged.
 
 export interface InjectConfig {
   /** sidecar session id (matched by `nitpicker-harness poll --session <id>`). */
@@ -207,6 +197,22 @@ export function builderPage(cfg: InjectConfig): string {
   .nh-chip .nh-src { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #8a93a0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
   .nh-chip .nh-del { position: absolute; right: 4px; top: 2px; border: 0; background: transparent; color: #6b727c; cursor: pointer; font-size: 13px; line-height: 1; }
   .nh-chip .nh-del:hover { color: #e06c6c; }
+  /* Markdown-rendered agent replies (src/builder/markdown.ts builds sanitized DOM into .nh-md). */
+  .nh-md { font-size: 13px; }
+  .nh-md > *:first-child { margin-top: 0; }
+  .nh-md > *:last-child { margin-bottom: 0; }
+  .nh-md p { margin: 6px 0; }
+  .nh-md h1, .nh-md h2, .nh-md h3, .nh-md h4, .nh-md h5, .nh-md h6 { margin: 10px 0 6px; line-height: 1.3; }
+  .nh-md h1 { font-size: 16px; } .nh-md h2 { font-size: 15px; } .nh-md h3 { font-size: 14px; }
+  .nh-md h4, .nh-md h5, .nh-md h6 { font-size: 13px; }
+  .nh-md ul, .nh-md ol { margin: 6px 0; padding-left: 20px; }
+  .nh-md li { margin: 2px 0; }
+  .nh-md code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #0e1114; border: 1px solid #23272e; border-radius: 4px; padding: 1px 4px; }
+  .nh-md pre { background: #0e1114; border: 1px solid #23272e; border-radius: 6px; padding: 8px 10px; overflow-x: auto; margin: 6px 0; }
+  .nh-md pre code { background: none; border: 0; padding: 0; }
+  .nh-md a { color: #7fb0ff; }
+  .nh-md blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid #2b313a; color: #9aa2ac; }
+  .nh-md hr { border: 0; border-top: 1px solid #23272e; margin: 8px 0; }
   .nh-compose { border-top: 1px solid #23272e; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
   .nh-compose textarea {
     resize: none; width: 100%; min-height: 56px; max-height: 160px; padding: 8px 10px; border-radius: 8px;
@@ -226,7 +232,7 @@ export function builderPage(cfg: InjectConfig): string {
 </style>
 </head>
 <body>
-  <div id="nh-stage"><iframe id="nh-frame" src="/?${NO_OVERLAY_PARAM}=1" title="proxied app"></iframe></div>
+  <div id="nh-stage"><iframe id="nh-frame" src="/" title="proxied app"></iframe></div>
   <aside id="nh-chat" aria-label="nitpicker builder">
     <div class="nh-hdr">
       <span class="nh-dot" id="nh-dot" title="agent status"></span>
@@ -242,7 +248,7 @@ export function builderPage(cfg: InjectConfig): string {
     <div id="nh-transcript"></div>
     <div class="nh-marks" id="nh-marks"></div>
     <div class="nh-compose">
-      <textarea id="nh-input" placeholder="Tell the agent what to build or change… (marks attach to your next message)"></textarea>
+      <textarea id="nh-input" placeholder="Describe a change…  Enter to queue · ⌘↵ to send · Shift↵ newline"></textarea>
       <div class="nh-row">
         <button class="nh-btn nh-send" id="nh-send-btn" type="button">Send to agent</button>
         <button class="nh-btn nh-stop" id="nh-stop-btn" type="button" title="Interrupt the current turn" disabled>Stop</button>

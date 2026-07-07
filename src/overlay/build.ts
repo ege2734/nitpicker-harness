@@ -51,7 +51,7 @@ async function bundleFromSource(): Promise<string> {
     format: "iife",
     platform: "browser",
     target: "es2020",
-    // The dynamic `import("html2canvas")` inside core/region.ts is inlined into the IIFE by esbuild, so
+    // The dynamic `import("html2canvas-pro")` inside core/region.ts is inlined into the IIFE by esbuild, so
     // the served bundle is fully self-contained (no code-split chunks to serve).
     minify: true,
     legalComments: "none",
