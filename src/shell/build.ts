@@ -28,11 +28,8 @@ export function buildShell(): Promise<string> {
 }
 
 function prebuilt(): string | null {
-  const candidates = [
-    join(HERE, "browser", OUTPUT),
-    join(HERE, "..", "..", "dist", "browser", OUTPUT),
-  ];
-  return candidates.find((c) => existsSync(c)) ?? null;
+  const file = join(HERE, "browser", OUTPUT);
+  return existsSync(file) ? file : null;
 }
 
 async function load(): Promise<string> {

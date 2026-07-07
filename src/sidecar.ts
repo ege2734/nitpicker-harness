@@ -32,9 +32,6 @@ export function startSidecar(port: number): ChildProcess {
 
 /** Locate the precompiled sidecar bundle, if this is a built package. */
 function builtSidecar(): string | null {
-  const candidates = [
-    join(HERE, "sidecar.js"), // bundled: dist/{cli,index}.js → dist/sidecar.js
-    join(HERE, "..", "..", "dist", "sidecar.js"), // dev tsx: src/sidecar.ts → <root>/dist/sidecar.js
-  ];
-  return candidates.find((c) => existsSync(c)) ?? null;
+  const built = join(HERE, "sidecar.js"); // bundled: dist/{cli,index}.js → dist/sidecar.js
+  return existsSync(built) ? built : null;
 }

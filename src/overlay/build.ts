@@ -30,14 +30,11 @@ export function buildOverlay(): Promise<string> {
   return cached;
 }
 
-/** Candidate prebuilt locations: next to the running bundle (dist/browser/…) or a dist/ built alongside a
- *  dev tsx run. First hit wins; miss → esbuild from source. */
+/** Prebuilt bundle location: next to the running bundle (dist/browser/…) in a built package.
+ *  Hit → serve it; miss (dev tsx from source) → esbuild from source. */
 function prebuilt(): string | null {
-  const candidates = [
-    join(HERE, "browser", OUTPUT), // bundled: dist/{cli,index}.js → dist/browser/<OUTPUT>
-    join(HERE, "..", "..", "dist", "browser", OUTPUT), // dev tsx: src/overlay/build.ts → <root>/dist/browser
-  ];
-  return candidates.find((c) => existsSync(c)) ?? null;
+  const file = join(HERE, "browser", OUTPUT); // bundled: dist/{cli,index}.js → dist/browser/<OUTPUT>
+  return existsSync(file) ? file : null;
 }
 
 async function load(): Promise<string> {
