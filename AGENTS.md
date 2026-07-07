@@ -18,7 +18,7 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   (`selfHandleResponse`), `X-Frame-Options`/CSP relaxation, absolute-URL rewrite, and **WebSocket
   upgrade forwarding** (HMR). Assets/HMR pass through; only `text/html` is buffered+rewritten.
 - `src/overlay/entry.ts` + `build.ts` — the browser overlay entry (calls the reused `Nitpicker.mount()`)
-  bundled by **esbuild** into one IIFE with html2canvas inlined, served at
+  bundled by **esbuild** into one IIFE with html2canvas-pro inlined, served at
   `/__nitpicker-harness/overlay.js`. Config (session/endpoint) rides on the script URL's query string —
   no inline script, so a strict `script-src 'self'` still runs it.
 - `src/shell/entry.ts` + `build.ts` — the **builder-shell** mode (viability report §6 / Phase 1), a
@@ -391,7 +391,7 @@ deps are present there; only a real out-of-repo prod install exposes it (hence `
   vendored transport, spawned as `node dist/sidecar.js`) — plus three self-contained **browser** IIFEs
   under `dist/browser/{overlay,shell,builder}.js`. Server bundles use `packages:"external"`, so the only
   runtime `dependency` is **`http-proxy`**; the Claude Agent SDK stays an `import(SDK_MODULE)` runtime
-  optional dep; `esbuild`/`html2canvas` moved to **devDependencies** (build-only).
+  optional dep; `esbuild`/`html2canvas-pro` moved to **devDependencies** (build-only).
 - `tsc -p tsconfig.build.json` emits `.d.ts` into `dist/types/**` (rootDir `.`), so `package.json`
   `types` → `dist/types/src/index.d.ts`. This is the typed surface **Loom pins**.
 - `package.json`: `main`/`exports` → `./dist/index.js`, `types` → `./dist/types/src/index.d.ts`, `bin`

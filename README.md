@@ -10,7 +10,7 @@ nitpicker-harness is a standalone **same-origin reverse proxy**. It fronts a tar
 own origin and rewrites the streamed HTML on the fly to inject the overlay. Because the page then runs
 *same-origin* with the overlay, every feature works unmodified:
 
-- 🖼️ **Region screenshots** — drag a box; the app's live DOM is rasterized (html2canvas) with a red box
+- 🖼️ **Region screenshots** — drag a box; the app's live DOM is rasterized (html2canvas-pro) with a red box
   burned in and everything else dimmed.
 - 🎯 **Element pick** — click a node; get its React **component** name (runtime fiber walk, no build
   step), the exact **`source`** `file:line:col` (owned Next builds — wired in setup), a stable CSS
@@ -133,7 +133,7 @@ nitpicker-harness shutdown [--endpoint <url>]
                  │  rewrites text/html:  inject overlay <script>, rewrite absolute URLs,
                  │  strip X-Frame-Options, relax CSP (frame-ancestors/script-src/connect-src/style-src)
                  │  forwards the HMR WebSocket (hot-reload survives)
-                 │  serves /__nitpicker-harness/overlay.js  (esbuild IIFE, html2canvas inlined)
+                 │  serves /__nitpicker-harness/overlay.js  (esbuild IIFE, html2canvas-pro inlined)
                  │  serves /__nitpicker-harness/shell(.js)   (builder-shell page + parent-chrome bundle)
                  ▼
              sidecar (:5178)  ◀── overlay POSTs feedback ──   agent `poll` drains it
