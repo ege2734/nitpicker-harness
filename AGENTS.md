@@ -74,7 +74,7 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
     `/blob` image store → `makeBackend()` → `AgentGateway` → `startHarness({ mountExtra, builderPane })`.
     Returns `{ url, builderUrl, shellUrl, targetUrl, session?, runtime, gateway?, close() }`. `close()` is
     the idle→free teardown (dev server + agent + sidecar + proxy). `package.json` `exports`/`main` point at
-    `src/index.ts` (the repo runs everything from TS under tsx — no dist).
+    the compiled `dist/index.js` (built from this source; see the "Packaging" section below).
   - `src/app/runtime.ts` — `AppRuntime` interface + `LocalAppRuntime` (v0 process-group owner, D6) +
     `detectDevCommand` (next→`next dev`, vite→`vite`, react-scripts→`react-scripts start`, else
     `scripts.dev`; explicit `--dev-cmd` wins, covers `uvicorn app:app --reload --port $PORT`). Spawns

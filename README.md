@@ -83,8 +83,8 @@ formatted into a prompt for the agent, whose edits land in real source files and
 through the proxy.
 
 ```bash
-npm run start -- ./path/to/app              # own the dev server + a live agent pane (builder URL)
-npm run start -- ./path/to/app --no-agent   # own the dev server, classic sidecar/poll sink
+npm run dev -- ./path/to/app                # own the dev server + a live agent pane (builder URL)
+npm run dev -- ./path/to/app --no-agent     # own the dev server, classic sidecar/poll sink
 ```
 
 The dev command is auto-detected (`next dev` / `vite` / `react-scripts start` / `scripts.dev`); pass
@@ -209,6 +209,8 @@ agent to grep straight to the code.
 ```bash
 npm run typecheck   # tsc --noEmit
 npm test            # vitest: proxy injection (tests/) + overlay engine (vendor/nitpicker/tests/)
+npm run build       # esbuild → dist/ + tsc → dist/types (what consumers run; auto-run by prepare/prepack)
+npm run verify-pack # CLEAN-INSTALL regression: pack → prod install → run bin + embedded smoke
 ```
 
 See [`AGENTS.md`](./AGENTS.md) for repo-specific notes.
