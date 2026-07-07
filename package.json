@@ -64,7 +64,7 @@
     "@babel/core": "^7.26.0",
     "@types/http-proxy": "^1.17.15",
     "@types/node": "^22.10.0",
-    "esbuild": "^0.24.0",
+    "esbuild": "^0.28.1",
     "html2canvas": "^1.4.1",
     "jsdom": "^25.0.1",
     "tsx": "^4.19.0",
