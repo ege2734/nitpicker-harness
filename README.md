@@ -66,6 +66,28 @@ The harness fronts your app in two ways, advertised side by side in the ready ba
   cancels), all read out of the same-origin iframe and rendered over it. Both modes POST to the same
   sidecar, so `poll` drains either.
 
+### Embedded-agent mode — the side pane *is* the agent
+
+Point the harness at an app **directory** instead of a URL and it owns the whole loop: it starts the
+app's dev server, proxies it as above, and puts a **live agent you build with** in the side pane — no
+external `poll` drain. Marks you make on the live preview become chips; on the turn boundary they're
+formatted into a prompt for the agent, whose edits land in real source files and hot-reload the preview
+through the proxy.
+
+```bash
+npm run start -- ./path/to/app              # own the dev server + a live agent pane (builder URL)
+npm run start -- ./path/to/app --no-agent   # own the dev server, classic sidecar/poll sink
+```
+
+The dev command is auto-detected (`next dev` / `vite` / `react-scripts start` / `scripts.dev`); pass
+`--dev-cmd "<cmd>"` to override — it **must** bind the injected `$PORT`
+(e.g. `--dev-cmd "uvicorn app:app --reload --port $PORT"`), or pass `--target-port` matching the port it
+binds, else readiness detection times out. An explicit `--target <url>` always wins, so the classic modes
+above are untouched. The reference agent backend (`--agent claude`) uses the Claude Agent SDK in-process
+(an optional dependency) with a `claude-cli` spawn fallback. Embedded mode is also exposed as a library —
+`startEmbeddedBuilder()` from `src/index.ts`, the surface the platform layer drives; see
+[`AGENTS.md`](./AGENTS.md).
+
 ### Keep the agent driven
 
 `poll` only delivers while the agent is actively running it — once a turn ends and the agent goes idle,
@@ -78,6 +100,7 @@ a mark queued while nothing is polling is never lost; it is delivered to the nex
 ### CLI
 
 ```
+nitpicker-harness <path-to-app> [--dev-cmd "<cmd>"] [--target-port <n>] [--port 4000] [--session nitpicker] [--agent claude|claude-cli] [--no-agent]
 nitpicker-harness --target <url> [--port 4000] [--session nitpicker] [--sidecar-port 5178] [--no-sidecar]
 nitpicker-harness poll --session <id> [--endpoint <url>] [--watch]
 nitpicker-harness stop-hook --session <id> [--endpoint <url>] [--timeoutMs <n>]   # turn-end driver hook

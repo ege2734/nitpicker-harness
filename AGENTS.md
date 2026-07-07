@@ -59,7 +59,58 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   v1 limitation: the source stamp is per host element, so an element with mixed children maps the edit to
   the element, not the exact text node.
 - `src/cli.ts` + `bin/nitpicker-harness` — CLI; spawns the vendored sidecar and starts the proxy. Also
-  exposes `stop-hook` (the turn-end driver) and `pending` (cheap queued-count signal).
+  exposes `stop-hook` (the turn-end driver) and `pending` (cheap queued-count signal). A **bare positional
+  path** (`nitpicker-harness <path-to-app>`, or `--app`) selects **embedded-agent mode** (below) via
+  `serveEmbedded`; the existing `--target <url>` path is unchanged and mutually exclusive (an explicit
+  `--target` always wins).
+- **Embedded-agent mode (W1, additive)** — `nitpicker-harness <path-to-app>` makes the side pane a **live
+  agent you build with** instead of an external `poll`-drained queue. It is strictly additive: the
+  feedback-proxy / builder-shell / sidecar / `poll` / stop-hook paths are byte-for-byte unchanged (pocket-
+  watcher + membership-management depend on them). Design authority: `data/hz-agent-h2/report.md` §7 +
+  loom-decision **D7** (Claude Agent SDK in-process reference backend + SSE gateway; CLI-spawn fallback;
+  reuse the `QueueItem`/`WireItem` mark schema verbatim). The new modules:
+  - `src/index.ts` — the **library entrypoint** `startEmbeddedBuilder(opts)` Loom drives per app + all the
+    interface re-exports. It composes: `LocalAppRuntime` (owns the dev server) → reuse the sidecar for its
+    `/blob` image store → `makeBackend()` → `AgentGateway` → `startHarness({ mountExtra, builderPane })`.
+    Returns `{ url, builderUrl, shellUrl, targetUrl, session?, runtime, gateway?, close() }`. `close()` is
+    the idle→free teardown (dev server + agent + sidecar + proxy). `package.json` `exports`/`main` point at
+    `src/index.ts` (the repo runs everything from TS under tsx — no dist).
+  - `src/app/runtime.ts` — `AppRuntime` interface + `LocalAppRuntime` (v0 process-group owner, D6) +
+    `detectDevCommand` (next→`next dev`, vite→`vite`, react-scripts→`react-scripts start`, else
+    `scripts.dev`; explicit `--dev-cmd` wins, covers `uvicorn app:app --reload --port $PORT`). Spawns
+    `detached` (its own process group) and injects `PORT`, then polls readiness, surfacing
+    `starting|ready|crashed|stopped`. An explicit `--dev-cmd` MUST bind the injected `$PORT` (or the caller
+    passes `--target-port` matching the port it binds), else the readiness probe never finds the server.
+    `stop()` signals the whole process group so an npm-forked grandchild dev server (`scripts.dev` path) is
+    reaped and the port is freed. Names mirror `@loom/contracts` `AppRuntime`. NOTE
+    the deliberate two-level naming: `AppRuntime` here is the **in-container dev-server** lifecycle; Loom's
+    Python control-plane `Runtime` is the platform orchestrator — keep them distinct.
+  - `src/agent/backend.ts` — vendor-agnostic `AgentBackend`/`AgentSession`/`AgentEvent`/`AgentInput`/
+    `WireItem` (mirror `@loom/contracts/agent.ts` verbatim so Loom pins this repo) + `makeBackend(name)`
+    registry. `src/agent/claude-backend.ts` — the reference backend: **in-process** over
+    `@anthropic-ai/claude-agent-sdk` (dynamic-imported by a non-literal specifier so it stays an *optional*
+    dep — declared under `optionalDependencies`, never statically required; unit tests never load it) with a
+    `claude -p --output-format stream-json` **CLI-spawn fallback** (`makeBackend("claude-cli")`).
+  - `src/agent/format.ts` — **pure** marks→prompt formatting (element→source line, region→image-path line,
+    text-edit→"change X to Y", message→note). `src/agent/gateway.ts` — the **SSE Agent Gateway** mounted on
+    the existing server via `startHarness`'s new `mountExtra` hook. Routes under `/__nitpicker-harness/agent`:
+    `POST /message`, `GET /stream` (SSE, `Last-Event-ID` resumable), `POST /interrupt`, `GET /history`.
+    Server-side **authoritative** transcript + event log keyed by `sessionId`. Auth is a parameter
+    (`GatewayAuth`: `openAuth()` local default, `bearerAuth(token)` for Loom) — token via header/cookie,
+    **never** the query string.
+  - `src/shell/interaction.ts` — the reusable `InteractionLayer` **extracted verbatim** from `ShellChrome`
+    (mode toolbar, picker, region drag→capture, inline edit, geometry, `Env`→`QueueItem`). It is
+    sink-agnostic (`InteractionSink`): `ShellChrome` keeps the sidecar `Transport` sink; `BuilderChrome`
+    (`src/builder/entry.ts`) swaps in the gateway client (`src/builder/client.ts`) + a streaming transcript.
+    `src/builder/{entry,build}.ts` + `inject.ts:builderPage()` serve the new `/__nitpicker-harness/build[.js]`
+    pane (sibling of the shell). Extraction is behavior-preserving — guarded by `tests/interaction.test.ts`
+    + the unchanged `tests/shell-geometry.test.ts` / vendor `env-seam.test.ts`.
+
+  The **load-bearing reuse**: the agent edits real source files → the app's own HMR (already forwarded
+  through the proxy) reloads the iframe. No preview-refresh channel is built; chat + live preview stay in
+  lockstep for free. Tests: `tests/gateway.test.ts` (marks→prompt + SSE stream/resume + auth),
+  `tests/runtime.test.ts` (dev-command detection + spawn/ready/stop), `tests/proxy-embed.test.ts` (pane +
+  gateway mounted through the real proxy; classic paths still served).
 - `src/hook.ts` — the **feedback driver**: a Claude-Code Stop-hook that parks on the sidecar's `/wait`
   (zero token cost) and, when a mark lands, emits `{"decision":"block","reason":…}` to re-invoke the
   agent to drain via `poll`. `decideStopHook` is a pure, injectable-transport core (unit-tested in
@@ -207,7 +258,9 @@ turn-end trigger" shape:
 ```bash
 npm run typecheck      # tsc --noEmit
 npm test               # vitest: tests/** (proxy) + vendor/nitpicker/tests/** (reused core)
-npm run start -- --target http://localhost:3000   # run the harness
+npm run start -- --target http://localhost:3000   # run the harness (target mode)
+npm run start -- ./path/to/app                     # embedded-agent mode (owns the dev server + live pane)
+npm run start -- ./path/to/app --no-agent          # embedded dev-server ownership, classic sidecar sink
 ```
 
 ## Verify a change end-to-end
@@ -223,3 +276,10 @@ Phase 1 = localhost dev proxy, Next.js reference target. Out of scope: browser e
 layer. `file:line:col` source is wired by default on owned Next builds (needs the target's bundler +
 `@babel/core`); non-owned/non-Next apps degrade cleanly to component+selector+text+route. See README
 "done vs deferred".
+
+**Embedded-agent mode (W1)** adds dev-server ownership + an in-pane agent behind the SSE gateway; the
+`startEmbeddedBuilder()` library is the surface Loom pins (D7/D9). Out of W1's lane (Loom-side, W2–W5):
+the control-plane `Runtime`/auth, multi-runtime apps (frontend + FastAPI backend — the harness proxies
+ONE origin), git-per-turn, and headless self-verify. Marks are queued as chips and only sent on an
+explicit turn boundary (the `source` file:line:col is the stable anchor; selectors can go stale as the
+agent's edits churn the DOM).
