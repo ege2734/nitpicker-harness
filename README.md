@@ -30,13 +30,21 @@ under `vendor/nitpicker/`, wrapped by the proxy in `src/`).
 ## Quickstart
 
 ```bash
-# install deps (first time)
+# install deps (first time). `npm install` also builds dist/ (via the `prepare` script).
 npm install
 
 # your app's dev server is already running, e.g. on http://localhost:3000
-npm run start -- --target http://localhost:3000
-#   or, once published:  npx nitpicker-harness --target http://localhost:3000
+npm run dev -- --target http://localhost:3000
+#   as an installed dependency:  npx nitpicker-harness --target http://localhost:3000
 ```
+
+> **Consuming it as a dependency?** The published/git-installed package runs **compiled JS from `dist/`**
+> with plain `node` — no `tsx`, no build step at runtime. Installing builds `dist/` (`prepare`/`prepack`),
+> so the `nitpicker-harness` CLI and the library (`import { startEmbeddedBuilder } from "nitpicker-harness"`)
+> work in a clean, no-dev-deps install. In THIS repo, `npm run dev` runs the TS source under tsx for a
+> fast edit loop (`start`/`harness`/`poll` are aliases); `npm run build` produces `dist/`; and
+> `npm run verify-pack` proves a packed, production-installed tarball is runnable. Rebuild (`npm run build`)
+> after editing any browser entry or the vendored core before packing/publishing.
 
 It prints a harness URL (default `http://127.0.0.1:4000`) and starts its own sidecar. Open that URL,
 mark up your app with the bottom-center dock, hit **Send to agent**, then drain the feedback:

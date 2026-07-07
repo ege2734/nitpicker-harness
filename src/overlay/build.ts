@@ -1,23 +1,28 @@
-// nitpicker-harness — bundle the browser overlay entry (src/overlay/entry.ts) into a single self-
-// contained IIFE, with html2canvas inlined, ready to be served and injected into proxied pages.
+// nitpicker-harness — provide the browser overlay bundle (src/overlay/entry.ts) as a single self-
+// contained IIFE, served and injected into proxied pages.
 //
-// In nitpicker's normal (installed) flow the TARGET's bundler (Next/webpack) compiles @nitpicker/core +
-// html2canvas. The harness has no such bundler on the target, so it produces the browser bundle itself
-// with esbuild. We build once on first request and cache the result in memory (the overlay source is
-// static for the process lifetime), so serving it is a hot string write.
+// In a built package the bundle is produced ahead of time by scripts/build.mjs into dist/browser/overlay.js
+// and simply read from disk here — so a clean consumer install needs NO esbuild/html2canvas at runtime.
+// In dev/test (running the TS source under tsx/vitest, no dist) we fall back to bundling from source with
+// esbuild, so the source stays the single source of truth. esbuild is dynamically imported ONLY on that
+// fallback, keeping it a build-only devDependency.
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { build } from "esbuild";
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ENTRY = join(HERE, "entry.ts");
 
 let cached: Promise<string> | null = null;
 
-/** Bundle the overlay entry into an IIFE string. Cached for the process lifetime. */
+/** Bundle name under dist/browser/. */
+const OUTPUT = "overlay.js";
+
+/** Provide the overlay bundle as an IIFE string. Cached for the process lifetime. */
 export function buildOverlay(): Promise<string> {
   if (!cached) {
-    cached = bundle().catch((err) => {
+    cached = load().catch((err) => {
       cached = null;
       throw err;
     });
@@ -25,7 +30,24 @@ export function buildOverlay(): Promise<string> {
   return cached;
 }
 
-async function bundle(): Promise<string> {
+/** Candidate prebuilt locations: next to the running bundle (dist/browser/…) or a dist/ built alongside a
+ *  dev tsx run. First hit wins; miss → esbuild from source. */
+function prebuilt(): string | null {
+  const candidates = [
+    join(HERE, "browser", OUTPUT), // bundled: dist/{cli,index}.js → dist/browser/<OUTPUT>
+    join(HERE, "..", "..", "dist", "browser", OUTPUT), // dev tsx: src/overlay/build.ts → <root>/dist/browser
+  ];
+  return candidates.find((c) => existsSync(c)) ?? null;
+}
+
+async function load(): Promise<string> {
+  const file = prebuilt();
+  if (file) return readFile(file, "utf8");
+  return bundleFromSource();
+}
+
+async function bundleFromSource(): Promise<string> {
+  const { build } = await import("esbuild");
   const result = await build({
     entryPoints: [ENTRY],
     bundle: true,
@@ -37,8 +59,7 @@ async function bundle(): Promise<string> {
     minify: true,
     legalComments: "none",
     // core/index.ts probes `process.env.NODE_ENV`; define it so the prod backstop reads "development"
-    // (the harness is a dev tool) and never refuses to mount. `typeof process` is still "undefined" in
-    // the browser, so this only matters as a safety define.
+    // (the harness is a dev tool) and never refuses to mount.
     define: { "process.env.NODE_ENV": '"development"' },
     write: false,
   });

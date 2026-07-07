@@ -269,12 +269,50 @@ turn-end trigger" shape:
 ## Commands
 
 ```bash
+npm run build          # scripts/build.mjs (esbuild → dist/) + tsc -p tsconfig.build.json (→ dist/types)
 npm run typecheck      # tsc --noEmit
 npm test               # vitest: tests/** (proxy) + vendor/nitpicker/tests/** (reused core)
-npm run start -- --target http://localhost:3000   # run the harness (target mode)
-npm run start -- ./path/to/app                     # embedded-agent mode (owns the dev server + live pane)
-npm run start -- ./path/to/app --no-agent          # embedded dev-server ownership, classic sidecar sink
+npm run verify-pack    # CLEAN-INSTALL regression: pack → pnpm --prod install → run bin + embedded smoke
+npm run dev -- --target http://localhost:3000     # dev: run the TS source under tsx (no build)
+npm run dev -- ./path/to/app                       # dev: embedded-agent mode (owns the dev server + live pane)
+npm run dev -- ./path/to/app --no-agent            # dev: embedded dev-server ownership, classic sidecar sink
 ```
+
+`start`/`harness`/`poll` are tsx aliases kept for local dev (identical to `dev`). Consumers never touch tsx.
+
+## Packaging: the build + consumer contract (why `dist/`, not `tsx`)
+
+**The package ships COMPILED JS in `dist/` and runs it with plain `node` — there is NO `tsx` at runtime.**
+This is load-bearing: running the TS **source** under `tsx` broke every clean consumer install (Loom's
+`loom-embed`, `make dogfood`). `tsx` is a **devDependency**, and even in `dependencies` it fails under
+pnpm's isolated `node_modules` — the old `bin`/`src/sidecar.ts` did `require.resolve("tsx/dist/cli.mjs")`,
+but tsx's `exports` map only exposes `./cli`, so pnpm consumers hit `ERR_PACKAGE_PATH_NOT_EXPORTED` → the
+`npx tsx` fallback → exit 127. The in-repo vitest/typecheck suite passed while this was broken because dev
+deps are present there; only a real out-of-repo prod install exposes it (hence `npm run verify-pack`).
+
+- `scripts/build.mjs` (esbuild) produces three **server** bundles — `dist/cli.js` (the `bin` target),
+  `dist/index.js` (the `startEmbeddedBuilder` library + interface re-exports), `dist/sidecar.js` (the
+  vendored transport, spawned as `node dist/sidecar.js`) — plus three self-contained **browser** IIFEs
+  under `dist/browser/{overlay,shell,builder}.js`. Server bundles use `packages:"external"`, so the only
+  runtime `dependency` is **`http-proxy`**; the Claude Agent SDK stays an `import(SDK_MODULE)` runtime
+  optional dep; `esbuild`/`html2canvas` moved to **devDependencies** (build-only).
+- `tsc -p tsconfig.build.json` emits `.d.ts` into `dist/types/**` (rootDir `.`), so `package.json`
+  `types` → `dist/types/src/index.d.ts`. This is the typed surface **Loom pins**.
+- `package.json`: `main`/`exports` → `./dist/index.js`, `types` → `./dist/types/src/index.d.ts`, `bin`
+  still `bin/nitpicker-harness` (now a thin node launcher that `import()`s `dist/cli.js`). `prepare` +
+  `prepack` run the build, so a **git-dependency** install (runs `prepare` with devDeps present) and an
+  `npm publish` (runs `prepack`) both ship a runnable, tsx-free package; `files` includes `dist` + `vendor`.
+- **`src/*/build.ts` and `src/sidecar.ts` are dual-mode:** they prefer the prebuilt `dist/` artifact and
+  only fall back to esbuild-from-source / `tsx` (resolved via `require.resolve("tsx/cli")`) when no `dist/`
+  is present — i.e. an in-repo tsx/vitest run. `esbuild` is `await import()`ed **only** on that fallback so
+  it's never required in a clean consumer install. So both `npm test` (fallback path, no dist needed) and a
+  built package (prebuilt path) are green; `scripts/verify-pack.sh` guards the built/clean path.
+- **Consumer contract for Loom:** import path is unchanged (`import { startEmbeddedBuilder, makeBackend,
+  LOOM_BUILDER_SYSTEM_PROMPT, … } from "nitpicker-harness"` and the `nitpicker-harness` CLI command); only
+  the resolved files moved from `src/*.ts` to `dist/*.js`. The `vendor/nitpicker/next/*` source-stamp files
+  are still shipped verbatim (copied into the target, not imported), so that wiring is unaffected.
+- **After editing any browser entry or the vendored core, rebuild** (`npm run build`) before packing — a
+  prebuilt `dist/` is served as-is; the in-memory bundle cache note above still applies to a running proxy.
 
 ## Verify a change end-to-end
 

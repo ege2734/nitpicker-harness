@@ -1,26 +1,25 @@
-// nitpicker-harness — bundle the browser shell entry (src/shell/entry.ts) into a single self-contained
-// IIFE, served at SHELL_JS_PATH and loaded by the parent shell page (inject.ts:shellPage). Mirrors
-// src/overlay/build.ts: the harness has no bundler on the target, so esbuild produces the browser bundle
-// here and caches it in memory for the process lifetime (the source is static). Restart the harness after
-// editing the shell entry — a reload alone serves the stale cached bundle (same rule as the overlay).
+// nitpicker-harness — provide the browser shell bundle (src/shell/entry.ts) as a single self-contained
+// IIFE, served at SHELL_JS_PATH and loaded by the parent shell page (inject.ts:shellPage).
 //
-// Phase 1 reused only vendor/nitpicker/core/{transport,types}.ts (chat + queue + send). Phase 2 adds the
-// interactive layer, so this bundle now also pulls the engine primitives (core/region + elements +
-// react-source) and — via region.ts's dynamic import("html2canvas") — html2canvas, inlined into the IIFE
-// by esbuild exactly as the overlay bundle does. The bundle is larger but still fully self-contained.
+// Mirrors src/overlay/build.ts: in a built package the bundle is produced ahead of time by
+// scripts/build.mjs into dist/browser/shell.js and read from disk (no esbuild/html2canvas at runtime);
+// in dev/test we fall back to bundling from source with esbuild (dynamically imported only on that path).
+// Restart the harness after editing the shell entry — a reload alone serves the stale cached bundle.
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { build } from "esbuild";
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ENTRY = join(HERE, "entry.ts");
+const OUTPUT = "shell.js";
 
 let cached: Promise<string> | null = null;
 
-/** Bundle the shell entry into an IIFE string. Cached for the process lifetime. */
+/** Provide the shell bundle as an IIFE string. Cached for the process lifetime. */
 export function buildShell(): Promise<string> {
   if (!cached) {
-    cached = bundle().catch((err) => {
+    cached = load().catch((err) => {
       cached = null;
       throw err;
     });
@@ -28,7 +27,22 @@ export function buildShell(): Promise<string> {
   return cached;
 }
 
-async function bundle(): Promise<string> {
+function prebuilt(): string | null {
+  const candidates = [
+    join(HERE, "browser", OUTPUT),
+    join(HERE, "..", "..", "dist", "browser", OUTPUT),
+  ];
+  return candidates.find((c) => existsSync(c)) ?? null;
+}
+
+async function load(): Promise<string> {
+  const file = prebuilt();
+  if (file) return readFile(file, "utf8");
+  return bundleFromSource();
+}
+
+async function bundleFromSource(): Promise<string> {
+  const { build } = await import("esbuild");
   const result = await build({
     entryPoints: [ENTRY],
     bundle: true,
