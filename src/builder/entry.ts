@@ -8,12 +8,18 @@
 // Config (session + sidecar endpoint) rides this script's own <script src> query string — read
 // SYNCHRONOUSLY at module load (currentScript is only non-null then; see AGENTS.md).
 import type { QueueItem } from "../../vendor/nitpicker/core/types";
-import { InteractionLayer, type InteractionSink } from "../shell/interaction";
+import {
+  InteractionLayer,
+  frameViewport,
+  iframeLocation,
+  type InteractionSink,
+} from "../shell/interaction";
 import type { ParentBox } from "../shell/geometry";
 import type { AgentEvent } from "../agent/backend";
 import { AgentGatewayClient } from "./client";
 import { AnnotationPopup, annotateLabel } from "./annotate";
 import { buildQueueItem } from "./queue";
+import { classifyComposerKey, partitionQueue } from "./compose";
 
 function readConfig(): { session: string; endpoint: string } {
   const fallback = { session: "nitpicker", endpoint: "http://127.0.0.1:5178" };
@@ -123,20 +129,52 @@ class BuilderChrome implements InteractionSink {
   }
 
   private wire(): void {
-    this.sendBtn.addEventListener("click", () => void this.send());
+    // The Send button flushes the whole queue (typed messages + marks) as one turn.
+    this.sendBtn.addEventListener("click", () => void this.flush());
     this.stopBtn.addEventListener("click", () => void this.client.interrupt());
+    // Composer submit semantics: Enter → queue the typed text (stage, don't send); Cmd/Ctrl+Enter → flush
+    // the whole queue to the agent; Shift+Enter → newline.
     this.inputEl.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        void this.send();
-      }
+      const action = classifyComposerKey(e);
+      if (!action || action === "newline") return; // Shift+Enter / non-Enter → default (newline)
+      e.preventDefault();
+      if (action === "flush") void this.flush();
+      else this.queueFromComposer();
     });
   }
 
-  private async send(): Promise<void> {
-    if (this.sending || this.busy) return;
+  /** Stage the composer text as a standalone "message" mark in the same queue the picks/regions feed. */
+  private queueFromComposer(): boolean {
     const text = this.inputEl.value.trim();
-    const marks = this.pendingMarks.slice();
+    if (!text) return false;
+    const frame = document.getElementById("nh-frame") as HTMLIFrameElement | null;
+    const { href, route } = iframeLocation(frame);
+    this.pendingMarks.push({
+      id: newId(),
+      kind: "message",
+      text,
+      pageUrl: href,
+      route,
+      viewport: frameViewport(frame),
+      timestamp: new Date().toISOString(),
+    });
+    this.inputEl.value = "";
+    this.renderMarks();
+    this.setStatus("Queued — ⌘↵ to send.");
+    return true;
+  }
+
+  /**
+   * Flush the whole queue to the agent as ONE turn. Any un-queued composer text is queued first (so a single
+   * quick message still sends in one gesture). Grouping (the open judgment call): queued "message" items
+   * become the turn's typed text, joined in order; region/element/text-edit marks ride as `marks` carrying
+   * their file:line / region context — exactly the shape the gateway's formatTurn already composes (typed
+   * text leads, marks follow as context blocks).
+   */
+  private async flush(): Promise<void> {
+    if (this.sending || this.busy) return;
+    this.queueFromComposer(); // fold any un-staged composer text into the queue first
+    const { text, marks } = partitionQueue(this.pendingMarks);
     if (!text && marks.length === 0) return;
     this.sending = true;
     this.updateControls();
@@ -150,8 +188,8 @@ class BuilderChrome implements InteractionSink {
       const uploadable = marks.filter((i) => !(i.kind === "region" && !i._blob));
       this.appendMessage("user", text, uploadable);
       await this.client.send(text, uploadable);
-      this.inputEl.value = "";
       this.pendingMarks = [];
+      this.expandedId = null;
       this.renderMarks();
       this.setStatus("");
     } catch (err) {
@@ -206,7 +244,8 @@ class BuilderChrome implements InteractionSink {
     if (this.transcriptEl.childElementCount) return;
     const empty = document.createElement("div");
     empty.className = "nh-empty";
-    empty.textContent = "Ask the agent to build or change something. Use the mode toolbar to mark the preview.";
+    empty.textContent =
+      "Mark the preview or type a message. Enter queues · ⌘/Ctrl+Enter sends the queue to the agent.";
     this.transcriptEl.appendChild(empty);
   }
 
@@ -305,6 +344,12 @@ class BuilderChrome implements InteractionSink {
   private scrollToEnd(): void {
     this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
   }
+}
+
+function newId(): string {
+  return typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `np-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
 }
 
 const CONFIG = readConfig();

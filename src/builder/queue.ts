@@ -10,13 +10,15 @@
 // NOT the sidecar/poll destination. Self-contained inline styles (dark builder chrome); unit-tested in
 // tests/queue.test.ts.
 import type { QueueItem } from "../../vendor/nitpicker/core/types";
+import { openRegionLightbox } from "./lightbox";
 
 export interface QueueItemHandlers {
   /** Remove the mark from the queue (the classic modal's Remove). */
   onRemove: (id: string) => void;
   /** Toggle the expanded detail for this item (single-open, tracked by the host). */
   onToggle: (id: string) => void;
-  /** Live note edit from the expanded detail's textarea (supersedes the classic Save button). */
+  /** Save an edited note back onto the queued item (Enter-to-save in the expanded textarea, mirroring the
+   *  classic overlay item modal's Save). Not fired on Esc (cancel) — the prior note is kept. */
   onNoteChange: (id: string, note: string) => void;
 }
 
@@ -137,12 +139,24 @@ export function buildQueueItem(
 
   const ta = document.createElement("textarea");
   ta.className = "nh-item-noteedit";
-  ta.placeholder = "Note for the agent… (optional)";
+  ta.placeholder = "Edit note… (Enter to save · Shift+Enter newline · Esc cancel)";
   ta.value = item.text ?? "";
   ta.rows = 2;
   ta.style.cssText =
     "resize:none;width:100%;box-sizing:border-box;padding:6px 8px;border-radius:6px;border:1px solid #2b313a;background:#0e1114;color:#e6e8eb;font:inherit;font-size:12px;";
-  ta.addEventListener("input", () => handlers.onNoteChange(item.id, ta.value));
+  // Enter-to-save (mirrors the classic overlay item modal's Save + collapse); Esc cancels the edit (the
+  // prior note is untouched — edits aren't live-applied); Shift+Enter is a newline within the note.
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handlers.onNoteChange(item.id, ta.value.trim());
+      handlers.onToggle(item.id); // collapse/confirm
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      handlers.onToggle(item.id); // collapse without saving
+    }
+  });
   // Don't let a click inside the textarea bubble to the header toggle.
   ta.addEventListener("click", (e) => e.stopPropagation());
   detail.appendChild(ta);
@@ -159,16 +173,23 @@ export function buildQueueItem(
   return row;
 }
 
-/** The red-boxed region screenshot (full-res blob → thumbnail → placeholder). Ported from fillRegionBody. */
+/** The red-boxed region screenshot (thumbnail in the rail; click → full-res lightbox). Ported from
+ *  fillRegionBody; the rail preview prefers the small `_thumb` data URL (no object-URL leak), while the
+ *  lightbox opens the full-res `_blob`. */
 function regionPreview(item: QueueItem): HTMLElement {
-  const src = (item._blob && tryObjectURL(item._blob)) || item._thumb || null;
+  const src = item._thumb || (item._blob && tryObjectURL(item._blob)) || null;
   if (src) {
     const img = document.createElement("img");
     img.className = "nh-item-img";
     img.src = src;
     img.alt = "region screenshot";
+    img.title = "Click to enlarge";
     img.style.cssText =
-      "display:block;max-width:100%;border-radius:6px;border:1px solid #2b313a;background:#0e1114;";
+      "display:block;max-width:100%;border-radius:6px;border:1px solid #2b313a;background:#0e1114;cursor:zoom-in;";
+    img.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openRegionLightbox(item);
+    });
     return img;
   }
   const ph = document.createElement("div");

@@ -124,14 +124,52 @@ describe("buildQueueItem (expanded)", () => {
     expect(row.querySelector(".nh-item-edit")!.textContent).toContain("Hello");
   });
 
-  it("route is shown and the note textarea live-edits", () => {
-    let note: string | null = null;
-    const row = buildQueueItem(baseItem({ text: "orig" }), { ...noopHandlers, onNoteChange: (_id, n) => (note = n) }, true);
+  it("route is shown; the note textarea pre-fills the current note", () => {
+    const row = buildQueueItem(baseItem({ text: "orig" }), noopHandlers, true);
     expect(row.querySelector(".nh-item-route")!.textContent).toBe("/dash");
-    const ta = row.querySelector(".nh-item-noteedit") as HTMLTextAreaElement;
-    expect(ta.value).toBe("orig");
-    ta.value = "updated";
-    ta.dispatchEvent(new Event("input"));
-    expect(note).toBe("updated");
+    expect((row.querySelector(".nh-item-noteedit") as HTMLTextAreaElement).value).toBe("orig");
+  });
+
+  it("Enter saves the edited note and collapses; Esc cancels without saving; Shift+Enter is a newline", () => {
+    let saved: string | null = null;
+    let toggled = 0;
+    const handlers = { onRemove: () => {}, onToggle: () => toggled++, onNoteChange: (_id: string, n: string) => (saved = n) };
+
+    // Enter → save + collapse
+    let row = buildQueueItem(baseItem({ text: "orig" }), handlers, true);
+    let ta = row.querySelector(".nh-item-noteedit") as HTMLTextAreaElement;
+    ta.value = "edited";
+    ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(saved).toBe("edited");
+    expect(toggled).toBe(1);
+
+    // Esc → collapse, no save
+    saved = null;
+    row = buildQueueItem(baseItem({ text: "orig" }), handlers, true);
+    ta = row.querySelector(".nh-item-noteedit") as HTMLTextAreaElement;
+    ta.value = "discard me";
+    ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(saved).toBeNull();
+    expect(toggled).toBe(2);
+
+    // Shift+Enter → neither save nor collapse (newline)
+    saved = null;
+    row = buildQueueItem(baseItem({ text: "orig" }), handlers, true);
+    ta = row.querySelector(".nh-item-noteedit") as HTMLTextAreaElement;
+    ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true }));
+    expect(saved).toBeNull();
+    expect(toggled).toBe(2);
+  });
+
+  it("clicking the region screenshot opens a full-screen lightbox", () => {
+    const row = buildQueueItem(baseItem({ kind: "region", _thumb: "data:image/png;base64,AAA" }), noopHandlers, true);
+    document.body.appendChild(row);
+    expect(document.querySelector(".nh-lightbox")).toBeNull();
+    (row.querySelector("img.nh-item-img") as HTMLImageElement).click();
+    const box = document.querySelector(".nh-lightbox");
+    expect(box).not.toBeNull();
+    expect((box!.querySelector("img") as HTMLImageElement).src).toContain("data:image/png");
+    // cleanup
+    box!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
 });

@@ -232,7 +232,7 @@ export function builderPage(cfg: InjectConfig): string {
     <div id="nh-transcript"></div>
     <div class="nh-marks" id="nh-marks"></div>
     <div class="nh-compose">
-      <textarea id="nh-input" placeholder="Tell the agent what to build or change… (marks attach to your next message)"></textarea>
+      <textarea id="nh-input" placeholder="Describe a change…  Enter to queue · ⌘↵ to send · Shift↵ newline"></textarea>
       <div class="nh-row">
         <button class="nh-btn nh-send" id="nh-send-btn" type="button">Send to agent</button>
         <button class="nh-btn nh-stop" id="nh-stop-btn" type="button" title="Interrupt the current turn" disabled>Stop</button>

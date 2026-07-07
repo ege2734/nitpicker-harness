@@ -153,6 +153,20 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
     tracks a single `expandedId`, and revokes region object URLs before each re-render. **It stays on the
     live-SSE-agent sink** — marks + notes attach to the agent turn over the Agent Gateway; only the
     queue/annotation UI was ported, NOT the sidecar/poll destination. Guarded by `tests/queue.test.ts`.
+    Three follow-ons layer on this: (a) **region screenshot lightbox** (`src/builder/lightbox.ts`) — clicking
+    an expanded region preview opens the FULL-res `_blob` (→ `_thumb` fallback) full-screen over a dim
+    backdrop; Esc / backdrop-click closes and the full-size object URL is revoked (the rail preview itself
+    uses the leak-free `_thumb`); single-instance; `tests/lightbox.test.ts`. (b) **Enter-to-save on a queued
+    note** — the expanded item's note textarea commits on Enter (→ `onNoteChange` + collapse), Esc cancels
+    (prior note kept — edits are NOT live-applied), Shift+Enter newlines; mirrors the classic modal's Save.
+    (c) **Composer queueing model** (`src/builder/compose.ts`, pure) — `classifyComposerKey`: **Enter** stages
+    the typed text as a `"message"` `QueueItem` into the SAME queue (no send), **Cmd/Ctrl+Enter** flushes the
+    whole queue as one turn, **Shift+Enter** newlines; the Send button flushes. `partitionQueue` is the
+    grouping decision (the steer's open judgment call): queued `message` items join in order into the turn's
+    typed `text`, non-message marks ride as `marks` — exactly the shape `formatTurn` composes (text leads,
+    marks as context). Flush first folds any un-staged composer text in, so a single quick message still sends
+    in one ⌘↵ gesture. `tests/compose.test.ts`. The classic **shell** composer (Enter=queue via `queueMessage`)
+    is unchanged.
   - **Overlay-suppression is MODE-gated (no double UI):** the embedded builder pane drives element-pick /
     region / inline-edit from the PARENT against its iframe (the reused `InteractionLayer`/`Env` seam), so
     injecting the classic in-frame overlay dock+queue would be a redundant SECOND feedback UI over the same
