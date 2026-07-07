@@ -177,12 +177,17 @@ export class LocalAppRuntime implements AppRuntime {
       return;
     }
     await new Promise<void>((resolve) => {
+      let exited = false;
       const done = (): void => resolve();
-      child.once("exit", done);
+      child.once("exit", () => {
+        exited = true;
+        done();
+      });
       child.kill("SIGTERM");
-      // Escalate if it ignores SIGTERM (dev servers with child workers sometimes do).
+      // Escalate if it ignores SIGTERM (dev servers with child workers sometimes do). `child.killed` only
+      // means "a signal was sent", so gate on the real exit tracked by the 'exit' handler above.
       setTimeout(() => {
-        if (!child.killed) child.kill("SIGKILL");
+        if (!exited) child.kill("SIGKILL");
         done();
       }, 3000);
     });

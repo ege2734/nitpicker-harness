@@ -28,6 +28,11 @@ import type {
 
 export const AGENT_PREFIX = "/__nitpicker-harness/agent";
 
+/** How the harness asks the agent to open a region screenshot it references by path. Appended once, here,
+ *  because the gateway is the single marks→prompt formatter (backends stay dumb; hz-agent §3.3). */
+const IMAGE_HINT =
+  "Screenshots referenced above are local files — open them with the Read tool to see the marked region.";
+
 /** Gateway auth. `authorize` returns true for an authorized request. The token rides an `Authorization:
  *  Bearer` header or a cookie — NEVER the query string (it would leak in logs; hz-agent §5). */
 export interface GatewayAuth {
@@ -263,8 +268,9 @@ export class AgentGateway {
   /** The gateway owns marks→prompt formatting (backends stay dumb): fold the marks into `text` and keep the
    *  raw marks so an SDK backend can still attach region images by their local path. */
   private composeInput(input: AgentInput): AgentInput {
-    const { prompt } = formatTurn(input);
-    return { text: prompt, marks: input.marks };
+    const { prompt, imagePaths } = formatTurn(input);
+    const text = imagePaths.length ? `${prompt}\n\n${IMAGE_HINT}` : prompt;
+    return { text, marks: input.marks };
   }
 
   private emit(state: SessionState, event: AgentEvent): void {

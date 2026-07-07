@@ -264,6 +264,96 @@ describe("AgentGateway SSE stream", () => {
   });
 });
 
+// ---- the gateway is the SINGLE marks→prompt formatter (backends stay dumb; no double-formatting) ----
+class CapturingSession implements AgentSession {
+  readonly id: string;
+  constructor(
+    id: string,
+    private readonly onInput: (input: AgentInput) => void,
+  ) {
+    this.id = id;
+  }
+  async *send(input: AgentInput): AsyncIterable<AgentEvent> {
+    this.onInput(input);
+    yield { type: "turn_start" };
+    yield { type: "turn_end", ok: true };
+  }
+  async interrupt(): Promise<void> {}
+  history(): { role: "user" | "assistant"; text: string }[] {
+    return [];
+  }
+  async close(): Promise<void> {}
+}
+class CapturingBackend implements AgentBackend {
+  readonly id = "capturing";
+  received: AgentInput | null = null;
+  async startSession(opts: AgentSessionOptions): Promise<AgentSession> {
+    return new CapturingSession(opts.sessionId, (input) => {
+      this.received = input;
+    });
+  }
+}
+
+describe("AgentGateway marks→prompt composition", () => {
+  let server: Server;
+  let base: string;
+  let gw: AgentGateway;
+  let backend: CapturingBackend;
+
+  beforeAll(async () => {
+    backend = new CapturingBackend();
+    gw = new AgentGateway(backend, { cwd: "/tmp/app", auth: openAuth() });
+    server = createServer((req, res) => {
+      if (!gw.handler(req, res)) {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+  afterAll(async () => {
+    await gw.close();
+    await new Promise<void>((r) => server.close(() => r()));
+  });
+
+  it("folds each mark into the prompt EXACTLY ONCE (no gateway+backend double-format)", async () => {
+    await fetch(`${base}/__nitpicker-harness/agent/message`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "compose",
+        text: "tighten the spacing",
+        marks: [
+          { id: "a", kind: "element", text: "", pageUrl: "http://x", route: "/", viewport: { w: 1, h: 1, dpr: 1 }, timestamp: "t", element: { component: "Nav" } },
+          { id: "b", kind: "region", text: "", pageUrl: "http://x", viewport: { w: 1, h: 1, dpr: 1 }, timestamp: "t", image: { mime: "image/png", hasRedBox: true, selectionRect: { x: 0, y: 0, w: 4, h: 4 }, path: "/tmp/r.png" } },
+        ],
+      }),
+    });
+    for (let i = 0; i < 50 && backend.received === null; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const prompt = backend.received?.text ?? "";
+    expect(occurrences(prompt, "marks from the preview")).toBe(1);
+    expect(occurrences(prompt, "<Nav>")).toBe(1);
+    expect(occurrences(prompt, "/tmp/r.png")).toBe(1);
+    // The image hint rides the composed prompt once, and only when a region image is present.
+    expect(occurrences(prompt, "open them with the Read tool")).toBe(1);
+    // The backend receives the raw marks alongside the composed text so it can still attach images by path.
+    expect(backend.received?.marks?.length).toBe(2);
+  });
+});
+
+function occurrences(haystack: string, needle: string): number {
+  let count = 0;
+  let i = haystack.indexOf(needle);
+  while (i !== -1) {
+    count++;
+    i = haystack.indexOf(needle, i + needle.length);
+  }
+  return count;
+}
+
 describe("AgentGateway auth", () => {
   let server: Server;
   let base: string;

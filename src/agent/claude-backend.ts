@@ -8,7 +8,6 @@
 // dependency: present in real installs (Loom), absent-tolerant in CI. A session only touches the SDK when
 // `send()` is first driven; unit tests exercise the gateway with a fake backend and never load it.
 import { spawn, type ChildProcess } from "node:child_process";
-import { formatTurn } from "./format";
 import type {
   AgentBackend,
   AgentEvent,
@@ -21,10 +20,6 @@ import type {
 // Non-literal so TypeScript cannot resolve (and thus does not require) the module at check time — the
 // import is a genuine runtime-only, optional dependency. Kept as a `string`-typed const on purpose.
 const SDK_MODULE: string = "@anthropic-ai/claude-agent-sdk";
-
-/** How the harness asks the agent to open a region screenshot it references by path. */
-const IMAGE_HINT =
-  "Screenshots referenced above are local files — open them with the Read tool to see the marked region.";
 
 export class ClaudeBackend implements AgentBackend {
   readonly id: string;
@@ -55,11 +50,11 @@ abstract class BaseClaudeSession implements AgentSession {
   abstract interrupt(): Promise<void>;
   abstract close(): Promise<void>;
 
-  /** Record the user turn + build the composed prompt. Returns the prompt to feed the model. */
+  /** Record the user turn. The gateway is the single marks→prompt formatter (hz-agent §3.3), so `input.text`
+   *  is already the fully composed prompt (marks folded in, image hint appended) — feed it VERBATIM. */
   protected beginTurn(input: AgentInput): string {
     this.transcript.push({ role: "user", text: input.text ?? "", marks: input.marks });
-    const { prompt, imagePaths } = formatTurn(input);
-    return imagePaths.length ? `${prompt}\n\n${IMAGE_HINT}` : prompt;
+    return input.text ?? "";
   }
 
   /** Record the assistant turn from the accumulated token text. */
