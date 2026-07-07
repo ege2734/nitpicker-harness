@@ -77,8 +77,12 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
     `src/index.ts` (the repo runs everything from TS under tsx — no dist).
   - `src/app/runtime.ts` — `AppRuntime` interface + `LocalAppRuntime` (v0 process-group owner, D6) +
     `detectDevCommand` (next→`next dev`, vite→`vite`, react-scripts→`react-scripts start`, else
-    `scripts.dev`; explicit `--dev-cmd` wins, covers `uvicorn --reload`). Spawns, injects `PORT`, polls
-    readiness, surfaces `starting|ready|crashed|stopped`. Names mirror `@loom/contracts` `AppRuntime`. NOTE
+    `scripts.dev`; explicit `--dev-cmd` wins, covers `uvicorn app:app --reload --port $PORT`). Spawns
+    `detached` (its own process group) and injects `PORT`, then polls readiness, surfacing
+    `starting|ready|crashed|stopped`. An explicit `--dev-cmd` MUST bind the injected `$PORT` (or the caller
+    passes `--target-port` matching the port it binds), else the readiness probe never finds the server.
+    `stop()` signals the whole process group so an npm-forked grandchild dev server (`scripts.dev` path) is
+    reaped and the port is freed. Names mirror `@loom/contracts` `AppRuntime`. NOTE
     the deliberate two-level naming: `AppRuntime` here is the **in-container dev-server** lifecycle; Loom's
     Python control-plane `Runtime` is the platform orchestrator — keep them distinct.
   - `src/agent/backend.ts` — vendor-agnostic `AgentBackend`/`AgentSession`/`AgentEvent`/`AgentInput`/

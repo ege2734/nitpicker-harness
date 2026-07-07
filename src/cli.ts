@@ -46,6 +46,8 @@ function usage(): void {
       `  nitpicker-harness health [--endpoint <url>]\n` +
       `  nitpicker-harness shutdown [--endpoint <url>]\n\n` +
       `Embedded mode (a bare path): the harness owns the app's dev server and the side pane IS a live agent.\n` +
+      `  An explicit --dev-cmd MUST bind the injected $PORT (e.g. "uvicorn app:app --reload --port $PORT"),\n` +
+      `  or pass --target-port matching the port the command binds, else readiness detection times out.\n` +
       `Target mode (--target): point at an already-running server; mark up with the dock / builder shell.\n`,
   );
 }

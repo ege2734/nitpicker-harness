@@ -114,4 +114,35 @@ describe("LocalAppRuntime lifecycle", () => {
     });
     await expect(rt.start()).rejects.toThrow(/exited before it was ready/);
   }, 10_000);
+
+  it("stop() reaps a grandchild dev server (process-group kill), freeing the port", async () => {
+    const dir = appDir(null);
+    // Mirror the `npm run dev` shape: a parent that FORKS the real server as a grandchild and does NOT
+    // forward SIGTERM (it ignores it). Killing only the immediate child would leak the grandchild and hold
+    // the port; the group kill + SIGKILL escalation must reap both.
+    const parent =
+      "const cp=require('child_process');" +
+      "cp.spawn(process.execPath,['-e'," +
+      "`require('http').createServer((_,r)=>r.end('ok')).listen(${process.env.PORT},'127.0.0.1')`]," +
+      "{stdio:'ignore'});" +
+      "process.on('SIGTERM',()=>{});setInterval(()=>{},1000);";
+    const rt = new LocalAppRuntime({
+      appDir: dir,
+      devCommand: ["node", "-e", parent],
+      readyTimeoutMs: 10_000,
+    });
+    const { targetUrl } = await rt.start();
+    const port = Number(new URL(targetUrl).port);
+    expect((await (await fetch(targetUrl)).text())).toBe("ok");
+
+    await rt.stop();
+
+    // The grandchild must be gone: the port is bindable again.
+    const { createServer } = await import("node:net");
+    await new Promise<void>((resolve, reject) => {
+      const s = createServer();
+      s.once("error", reject);
+      s.listen(port, "127.0.0.1", () => s.close(() => resolve()));
+    });
+  }, 20_000);
 });

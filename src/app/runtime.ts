@@ -51,7 +51,9 @@ export interface DevCommand {
  * Detect the dev command for an app directory (hz-agent §2.3):
  *   explicit override wins → `next` dep → `vite` dep → `react-scripts` dep → `scripts.dev` → throw.
  * Returns the base command; the runtime injects the port per framework. Explicit commands are passed
- * through verbatim so non-Node stacks work (e.g. `uvicorn app:app --reload`).
+ * through verbatim so non-Node stacks work (e.g. `uvicorn app:app --reload --port $PORT`). An explicit
+ * command MUST bind the injected `$PORT` (or the caller passes `--target-port` matching the port the
+ * command binds), else the readiness probe cannot find the server and start() times out.
  */
 export function detectDevCommand(appDir: string, explicit?: string | string[]): DevCommand {
   if (explicit !== undefined) {
@@ -63,7 +65,8 @@ export function detectDevCommand(appDir: string, explicit?: string | string[]): 
   if (!pkg) {
     throw new Error(
       `nitpicker-harness: no package.json in ${appDir} and no --dev-cmd given. ` +
-        `Pass --dev-cmd "<command>" for non-Node apps (e.g. "uvicorn app:app --reload").`,
+        `Pass --dev-cmd "<command>" for non-Node apps (e.g. "uvicorn app:app --reload --port $PORT"); ` +
+        `the command must bind the injected $PORT (or pass --target-port to match the port it binds).`,
     );
   }
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
@@ -126,9 +129,12 @@ export class LocalAppRuntime implements AppRuntime {
     this.setStatus("starting");
 
     // shell:false; resolve framework bins from the app's own node_modules/.bin first (matches how a dev
-    // would run them), falling back to PATH so `npm`/`uvicorn`/etc. still resolve.
+    // would run them), falling back to PATH so `npm`/`uvicorn`/etc. still resolve. `detached:true` makes
+    // the child its own process-group leader so stop() can signal the WHOLE group — the `scripts.dev` path
+    // spawns `npm run dev`, which forks the real dev server as a grandchild npm doesn't reliably forward
+    // signals to; killing the group reaps the grandchild and frees the port.
     const cmd = resolveBin(this.appDir, dev.cmd);
-    const child = spawn(cmd, args, { cwd: this.appDir, env });
+    const child = spawn(cmd, args, { cwd: this.appDir, env, detached: true });
     this.child = child;
     child.stdout?.on("data", (d: Buffer) => log(d.toString()));
     child.stderr?.on("data", (d: Buffer) => log(d.toString()));
@@ -183,11 +189,11 @@ export class LocalAppRuntime implements AppRuntime {
         exited = true;
         done();
       });
-      child.kill("SIGTERM");
+      killGroup(child, "SIGTERM");
       // Escalate if it ignores SIGTERM (dev servers with child workers sometimes do). `child.killed` only
       // means "a signal was sent", so gate on the real exit tracked by the 'exit' handler above.
       setTimeout(() => {
-        if (!exited) child.kill("SIGKILL");
+        if (!exited) killGroup(child, "SIGKILL");
         done();
       }, 3000);
     });
@@ -212,6 +218,23 @@ function withPortArgs(dev: DevCommand, port: number): string[] {
   if (dev.source === "vite") return [...dev.args, "--port", String(port), "--strictPort"];
   if (dev.source === "next") return [...dev.args, "-p", String(port)];
   return dev.args;
+}
+
+/** Signal the child's whole process group (child spawned `detached`, so it leads its own group). Negating
+ *  the pid targets the group so an npm-forked grandchild dies with the parent. Falls back to signalling just
+ *  the child if the group send fails (ESRCH once it's already gone, or platforms without group semantics). */
+function killGroup(child: ChildProcess, sig: NodeJS.Signals): void {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  try {
+    process.kill(-pid, sig);
+  } catch {
+    try {
+      child.kill(sig);
+    } catch {
+      /* already exited */
+    }
+  }
 }
 
 /** Prefer the app's local `node_modules/.bin/<cmd>` (how a dev runs framework binaries), else PATH. */
