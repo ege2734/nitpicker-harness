@@ -19,6 +19,12 @@ export const OVERLAY_PATH = `${HARNESS_PREFIX}/overlay.js`;
 // is additive — the injected `overlay.js` "feedback proxy" mode above stays as the fallback.
 export const SHELL_PATH = `${HARNESS_PREFIX}/shell`;
 export const SHELL_JS_PATH = `${HARNESS_PREFIX}/shell.js`;
+// The "embedded builder" mode (hz-agent §2, loom-decision D7): a SIBLING of the builder-shell that swaps the
+// queue→sidecar sink for a LIVE agent — the pane IS the agent you build with, streaming its turn over the
+// Agent Gateway's SSE channel while the preview HMRs on the agent's own file edits. Additive: the shell
+// above (and its sidecar/poll consumers) are byte-for-byte unchanged.
+export const BUILD_PATH = `${HARNESS_PREFIX}/build`;
+export const BUILD_JS_PATH = `${HARNESS_PREFIX}/build.js`;
 
 export interface InjectConfig {
   /** sidecar session id (matched by `nitpicker-harness poll --session <id>`). */
@@ -126,6 +132,107 @@ export function shellPage(cfg: InjectConfig): string {
     </div>
   </aside>
   <script src="${SHELL_JS_PATH}?${q}" data-nitpicker-harness="shell"></script>
+</body>
+</html>`;
+}
+
+/** The embedded builder pane (served at BUILD_PATH, on the harness origin). Same iframe stage + mode
+ *  toolbar as the shell, but the right rail is a LIVE agent transcript + composer that POSTs turns to the
+ *  Agent Gateway and streams `AgentEvent`s back over SSE (src/builder/entry.ts). Config rides the bundle
+ *  URL's query string; no inline <script>. Pure/string-only so it stays unit-testable. */
+export function builderPage(cfg: InjectConfig): string {
+  const q = new URLSearchParams({ session: cfg.session, endpoint: cfg.endpoint }).toString();
+  const sessionText = escapeHtml(cfg.session);
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>nitpicker-harness · builder</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; height: 100vh; overflow: hidden;
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #0b0d10; color: #e6e8eb;
+  }
+  #nh-stage { position: relative; flex: 1 1 auto; min-width: 0; background: #fff; }
+  #nh-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  #nh-chat {
+    flex: 0 0 380px; width: 380px; height: 100%; display: flex; flex-direction: column;
+    border-left: 1px solid #23272e; background: #14171b;
+  }
+  .nh-hdr { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #23272e; }
+  .nh-hdr .nh-title { font-weight: 600; letter-spacing: .2px; }
+  .nh-hdr .nh-dot { width: 8px; height: 8px; border-radius: 50%; background: #6b727c; }
+  .nh-hdr .nh-dot.nh-ready { background: #4caf7d; }
+  .nh-hdr .nh-dot.nh-busy { background: #e0b34c; }
+  .nh-hdr .nh-sess { margin-left: auto; font-size: 11px; color: #8b929c; }
+  .nh-modes { display: inline-flex; gap: 2px; margin-left: 4px; padding: 2px; border-radius: 8px; background: #0e1114; border: 1px solid #23272e; }
+  .nh-mode { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #9aa2ac; cursor: pointer; font: inherit; font-size: 12px; line-height: 1; }
+  .nh-mode:hover { background: #1f242c; color: #e6e8eb; }
+  .nh-mode.nh-active { background: #2b5cff; color: #fff; }
+  #nh-transcript { flex: 1 1 auto; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .nh-empty { color: #6b727c; font-style: italic; padding: 8px 2px; }
+  .nh-msg { padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; }
+  .nh-msg.nh-user { background: #1c2534; border: 1px solid #26344a; align-self: flex-end; max-width: 92%; }
+  .nh-msg.nh-assistant { background: #1a1e24; border: 1px solid #262b33; align-self: flex-start; max-width: 96%; }
+  .nh-msg .nh-role { display: block; font-size: 10px; letter-spacing: .4px; text-transform: uppercase; color: #6b727c; margin-bottom: 3px; }
+  .nh-tool { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #9aa2ac; padding: 2px 0; }
+  .nh-tool .nh-file { color: #7fb0ff; }
+  .nh-err { color: #e06c6c; }
+  .nh-marks { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; border-top: 1px solid #23272e; }
+  .nh-marks:empty { display: none; }
+  .nh-chip { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 4px 22px 4px 8px; border: 1px solid #2b313a; border-radius: 14px; background: #1a1e24; font-size: 11px; max-width: 100%; }
+  .nh-chip .nh-src { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #8a93a0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+  .nh-chip .nh-del { position: absolute; right: 4px; top: 2px; border: 0; background: transparent; color: #6b727c; cursor: pointer; font-size: 13px; line-height: 1; }
+  .nh-chip .nh-del:hover { color: #e06c6c; }
+  .nh-compose { border-top: 1px solid #23272e; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .nh-compose textarea {
+    resize: none; width: 100%; min-height: 56px; max-height: 160px; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid #2b313a; background: #0e1114; color: #e6e8eb; font: inherit;
+  }
+  .nh-compose textarea:focus { outline: none; border-color: #2b5cff; }
+  .nh-row { display: flex; gap: 8px; }
+  .nh-btn { flex: 1 1 auto; padding: 8px 10px; border-radius: 8px; border: 1px solid #2b313a; background: #1f242c; color: #e6e8eb; font: inherit; font-weight: 600; cursor: pointer; }
+  .nh-btn:hover:not(:disabled) { background: #262c35; }
+  .nh-btn:disabled { opacity: .5; cursor: default; }
+  .nh-btn.nh-send { background: #2b5cff; border-color: #2b5cff; color: #fff; }
+  .nh-btn.nh-send:hover:not(:disabled) { background: #3f6bff; }
+  .nh-btn.nh-stop { flex: 0 0 auto; }
+  .nh-status { min-height: 16px; font-size: 11px; color: #8b929c; }
+  .nh-status.nh-ok { color: #4caf7d; }
+  .nh-status.nh-err { color: #e06c6c; }
+</style>
+</head>
+<body>
+  <div id="nh-stage"><iframe id="nh-frame" src="/" title="proxied app"></iframe></div>
+  <aside id="nh-chat" aria-label="nitpicker builder">
+    <div class="nh-hdr">
+      <span class="nh-dot" id="nh-dot" title="agent status"></span>
+      <span class="nh-title">builder</span>
+      <span class="nh-modes" role="group" aria-label="preview mode">
+        <button class="nh-mode nh-active" id="nh-mode-cursor" type="button" data-mode="cursor" title="Cursor — passive (Esc)" aria-label="Cursor mode">▧</button>
+        <button class="nh-mode" id="nh-mode-region" type="button" data-mode="region" title="Region — drag over the app to screenshot" aria-label="Region mode">⬚</button>
+        <button class="nh-mode" id="nh-mode-element" type="button" data-mode="element" title="Element — hover to outline, click to pick a component" aria-label="Element mode">◎</button>
+        <button class="nh-mode" id="nh-mode-edit" type="button" data-mode="edit" title="Edit text — click a text element to edit it inline (Enter to save, Esc to cancel)" aria-label="Edit text mode">✎</button>
+      </span>
+      <span class="nh-sess">${sessionText}</span>
+    </div>
+    <div id="nh-transcript"></div>
+    <div class="nh-marks" id="nh-marks"></div>
+    <div class="nh-compose">
+      <textarea id="nh-input" placeholder="Tell the agent what to build or change… (marks attach to your next message)"></textarea>
+      <div class="nh-row">
+        <button class="nh-btn nh-send" id="nh-send-btn" type="button">Send to agent</button>
+        <button class="nh-btn nh-stop" id="nh-stop-btn" type="button" title="Interrupt the current turn" disabled>Stop</button>
+      </div>
+      <div class="nh-status" id="nh-status"></div>
+    </div>
+  </aside>
+  <script src="${BUILD_JS_PATH}?${q}" data-nitpicker-harness="build"></script>
 </body>
 </html>`;
 }

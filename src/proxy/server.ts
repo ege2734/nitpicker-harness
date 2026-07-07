@@ -21,15 +21,19 @@ import type { Duplex } from "node:stream";
 import httpProxy from "http-proxy";
 import { buildOverlay } from "../overlay/build";
 import { buildShell } from "../shell/build";
+import { buildBuilder } from "../builder/build";
 import {
   HARNESS_PREFIX,
   OVERLAY_PATH,
   SHELL_PATH,
   SHELL_JS_PATH,
+  BUILD_PATH,
+  BUILD_JS_PATH,
   injectOverlay,
   relaxSecurityHeaders,
   rewriteAbsoluteUrls,
   shellPage,
+  builderPage,
   type InjectConfig,
 } from "./inject";
 
@@ -46,6 +50,12 @@ export interface HarnessOptions {
   host?: string;
   /** optional log sink (default console.log); set to a no-op to silence */
   log?: (msg: string) => void;
+  /** EMBEDDED mode (hz-agent §3.2): an extra request handler tried BEFORE proxy.web falls through. Returns
+   *  true if it handled the request. The Agent Gateway mounts here so its `/agent/*` routes are served from
+   *  this same server on the same origin/port (no CSP dance, no extra port). Omitted → unchanged behavior. */
+  mountExtra?: (req: IncomingMessage, res: ServerResponse) => boolean;
+  /** EMBEDDED mode: also serve the builder pane (/__nitpicker-harness/build[.js]) alongside the shell. */
+  builderPane?: boolean;
 }
 
 export interface Harness {
@@ -159,6 +169,12 @@ export function startHarness(opts: HarnessOptions): Promise<Harness> {
     // is what hits the proxy and gets the app + injected overlay.
     if (url.pathname === SHELL_PATH) return void serveShellPage(res, injectCfg);
     if (url.pathname === SHELL_JS_PATH) return void serveShellBundle(res, log);
+    // EMBEDDED mode: the builder pane (sibling of the shell) + the Agent Gateway routes. Both are gated on
+    // the caller opting in (builderPane / mountExtra) so the classic paths are byte-for-byte unchanged.
+    if (opts.builderPane && url.pathname === BUILD_PATH) return void serveBuilderPage(res, injectCfg);
+    if (opts.builderPane && url.pathname === BUILD_JS_PATH) return void serveBuilderBundle(res, log);
+    // The gateway (mountExtra) owns its `/agent/*` routes; try it before the proxy falls through.
+    if (opts.mountExtra?.(req, res)) return;
     if (url.pathname === `${HARNESS_PREFIX}/health`) {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, service: "nitpicker-harness", target: opts.target }));
@@ -329,6 +345,33 @@ async function serveShellBundle(res: ServerResponse, log: (m: string) => void): 
     log(`[nitpicker-harness] shell bundle failed: ${message}`);
     res.writeHead(500, { "content-type": "application/javascript" });
     res.end(`console.error(${JSON.stringify(`nitpicker-harness shell build failed: ${message}`)});`);
+  }
+}
+
+/** Serve the embedded builder pane (BUILD_PATH). Static string from inject.ts — no proxy, no build. */
+function serveBuilderPage(res: ServerResponse, cfg: InjectConfig): void {
+  const html = builderPage(cfg);
+  res.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-cache",
+  });
+  res.end(html);
+}
+
+/** Serve the builder bundle (BUILD_JS_PATH). Mirrors serveShellBundle: build-on-first-request, cached. */
+async function serveBuilderBundle(res: ServerResponse, log: (m: string) => void): Promise<void> {
+  try {
+    const js = await buildBuilder();
+    res.writeHead(200, {
+      "content-type": "application/javascript; charset=utf-8",
+      "cache-control": "no-cache",
+    });
+    res.end(js);
+  } catch (err) {
+    const message = (err as Error).message;
+    log(`[nitpicker-harness] builder bundle failed: ${message}`);
+    res.writeHead(500, { "content-type": "application/javascript" });
+    res.end(`console.error(${JSON.stringify(`nitpicker-harness builder build failed: ${message}`)});`);
   }
 }
 
