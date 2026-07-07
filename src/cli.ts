@@ -1,6 +1,7 @@
 // nitpicker-harness CLI. One command launches the whole thing: the vendored sidecar (transport server)
 // plus the reverse proxy that fronts your target dev server and injects the overlay.
 //
+//   nitpicker-harness <path-to-app>                         EMBEDDED: own the app's dev server + a live agent
 //   nitpicker-harness --target http://localhost:3000        start sidecar + proxy (open the printed URL)
 //   nitpicker-harness poll --session <id>                   the agent's long-poll for feedback batches
 //   nitpicker-harness stop-hook --session <id>              turn-end hook: drives the agent when a mark lands
@@ -9,16 +10,19 @@
 //   nitpicker-harness shutdown                              stop the sidecar
 //
 // The sidecar + poll live under vendor/nitpicker/{server,cli}; the proxy + overlay injection are the
-// harness's own code (src/proxy, src/overlay).
-import { spawn, type ChildProcess } from "node:child_process";
+// harness's own code (src/proxy, src/overlay). Embedded mode's composition is the `startEmbeddedBuilder()`
+// library (src/index.ts); this CLI is a thin wrapper over it.
+import type { ChildProcess } from "node:child_process";
 import { get, request } from "node:http";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { resolve } from "node:path";
 import { startHarness } from "./proxy/server";
+import { startSidecar } from "./sidecar";
+import { startEmbeddedBuilder } from "./index";
+import { makeBackend } from "./agent/backend";
+import { bearerAuth } from "./agent/gateway";
 import { runPoll } from "../vendor/nitpicker/cli/poll";
 import { runStopHook } from "./hook";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SIDECAR_PORT = 5178;
 const DEFAULT_PROXY_PORT = 4000;
 
@@ -33,30 +37,17 @@ function has(args: string[], name: string): boolean {
 function usage(): void {
   process.stderr.write(
     `nitpicker-harness — point at a running dev server and mark up feedback for your AI agent.\n\n` +
+      `  nitpicker-harness <path-to-app> [--dev-cmd "<cmd>"] [--target-port <n>] [--port <n>]\n` +
+      `                                  [--session <id>] [--agent claude|claude-cli] [--no-agent]\n` +
       `  nitpicker-harness --target <url> [--port <n>] [--session <id>] [--sidecar-port <n>] [--no-sidecar]\n` +
       `  nitpicker-harness poll --session <id> [--endpoint <url>] [--watch]\n` +
       `  nitpicker-harness stop-hook --session <id> [--endpoint <url>] [--timeoutMs <n>]\n` +
       `  nitpicker-harness pending --session <id> [--endpoint <url>]\n` +
       `  nitpicker-harness health [--endpoint <url>]\n` +
       `  nitpicker-harness shutdown [--endpoint <url>]\n\n` +
-      `Then open the printed harness URL and use the bottom-center dock (Region / Element / message).\n`,
+      `Embedded mode (a bare path): the harness owns the app's dev server and the side pane IS a live agent.\n` +
+      `Target mode (--target): point at an already-running server; mark up with the dock / builder shell.\n`,
   );
-}
-
-/** Spawn the vendored sidecar (vendor/nitpicker/server) under tsx, forwarding its stdio. */
-function startSidecar(port: number): ChildProcess {
-  const server = join(HERE, "..", "vendor", "nitpicker", "server", "index.ts");
-  const proc = spawn(process.execPath, [tsxLoader(), server], {
-    stdio: "inherit",
-    env: { ...process.env, NITPICKER_PORT: String(port) },
-  });
-  return proc;
-}
-
-/** Resolve the tsx ESM loader entry so we can run the vendored TS sidecar with the current node. */
-function tsxLoader(): string {
-  // `tsx` ships a CLI at node_modules/.bin/tsx; running it via node keeps us off a global `npx` fetch.
-  return join(HERE, "..", "node_modules", "tsx", "dist", "cli.mjs");
 }
 
 function ping(endpoint: string, path: string, method: "GET" | "POST"): Promise<string> {
@@ -127,6 +118,66 @@ async function serve(args: string[]): Promise<void> {
   process.on("SIGTERM", shutdown);
 }
 
+/** Embedded mode: own the app's dev server (from a path) and host a live agent in the side pane. Thin
+ *  wrapper over the `startEmbeddedBuilder()` library. */
+async function serveEmbedded(args: string[], appPathArg: string): Promise<void> {
+  const appPath = resolve(appPathArg);
+  const proxyPort = Number(flag(args, "port")) || DEFAULT_PROXY_PORT;
+  const sessionId = flag(args, "session") || "nitpicker";
+  const sidecarPort = Number(flag(args, "sidecar-port")) || DEFAULT_SIDECAR_PORT;
+  const endpoint = flag(args, "endpoint") || `http://127.0.0.1:${sidecarPort}`;
+  const devCommand = flag(args, "dev-cmd");
+  const targetPortRaw = flag(args, "target-port");
+  const targetPort = targetPortRaw ? Number(targetPortRaw) : undefined;
+  const model = flag(args, "model");
+  const noAgent = has(args, "no-agent");
+  const noSidecar = has(args, "no-sidecar");
+  const agentName = flag(args, "agent") || "claude";
+  const token = flag(args, "agent-token");
+
+  const agent = noAgent ? undefined : makeBackend(agentName, { model });
+  const auth = token ? bearerAuth(token) : undefined;
+
+  const builder = await startEmbeddedBuilder({
+    appPath,
+    proxyPort,
+    sessionId,
+    sidecarPort,
+    sidecarEndpoint: endpoint,
+    noSidecar,
+    devCommand,
+    targetPort,
+    model,
+    noAgent,
+    agent,
+    auth,
+    log: (m) => process.stdout.write(m.endsWith("\n") ? m : m + "\n"),
+  });
+
+  process.stdout.write(
+    `\n  nitpicker-harness ready ${noAgent ? "(embedded, --no-agent)" : "(embedded agent)"}\n` +
+      `  ┌─────────────────────────────────────────────\n` +
+      `  │ open:     ${builder.url}\n` +
+      `  │ builder:  ${builder.builderUrl}\n` +
+      `  │ shell:    ${builder.shellUrl}\n` +
+      `  │ app:      ${appPath}\n` +
+      `  │ target:   ${builder.targetUrl}  (owned dev server)\n` +
+      `  │ sidecar:  ${endpoint}${noSidecar ? "  (external — --no-sidecar)" : ""}\n` +
+      `  │ session:  ${sessionId}\n` +
+      `  └─────────────────────────────────────────────\n` +
+      (noAgent
+        ? `  • --no-agent: the pane uses the classic sidecar/poll sink. Drain with:\n` +
+          `      nitpicker-harness poll --session ${sessionId}\n\n`
+        : `  • Open the builder URL: chat with the agent + mark up the live preview in one pane.\n\n`),
+  );
+
+  const shutdown = (): void => {
+    void builder.close().finally(() => process.exit(0));
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const first = argv[0];
@@ -180,9 +231,13 @@ async function main(): Promise<void> {
       process.stdout.write((await ping(endpoint, "/shutdown", "POST")) + "\n");
       return;
     }
-    default:
-      // No subcommand → serve (flags like --target live here).
+    default: {
+      // A bare positional path (or --app <path>) selects EMBEDDED mode; `--target <url>` stays classic.
+      // The two are mutually exclusive: an explicit --target always wins (never treat it as embedded).
+      const appPath = flag(argv, "app") ?? (first && !first.startsWith("-") ? first : undefined);
+      if (appPath && !has(argv, "target")) return serveEmbedded(argv, appPath);
       return serve(argv);
+    }
   }
 }
 
