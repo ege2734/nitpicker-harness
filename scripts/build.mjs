@@ -7,12 +7,12 @@
 //        - dist/cli.js      the CLI entry (bin runs this)
 //        - dist/index.js    the library entry (`startEmbeddedBuilder` + interface re-exports)
 //        - dist/sidecar.js  the vendored transport sidecar (spawned as `node dist/sidecar.js` — never tsx)
-//   2. Browser bundles (platform=browser, IIFE, fully self-contained — html2canvas inlined):
+//   2. Browser bundles (platform=browser, IIFE, fully self-contained — html2canvas-pro inlined):
 //        - dist/browser/overlay.js   injected feedback overlay
 //        - dist/browser/shell.js     builder-shell parent chrome
 //        - dist/browser/builder.js   embedded builder pane
 //      These are served verbatim by the proxy at runtime (src/*/build.ts prefers the prebuilt file and only
-//      falls back to esbuild-from-source in dev/test), so esbuild + html2canvas are BUILD-only devDeps.
+//      falls back to esbuild-from-source in dev/test), so esbuild + html2canvas-pro are BUILD-only devDeps.
 //
 // Type declarations (dist/types/**) are emitted separately by `tsc -p tsconfig.build.json` (npm run build).
 import { build } from "esbuild";

@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const html2canvas = vi.fn(async () => document.createElement("canvas"));
-vi.mock("html2canvas", () => ({ default: html2canvas }));
+vi.mock("html2canvas-pro", () => ({ default: html2canvas }));
 
 import { rasterizeViewport } from "../core/region";
 

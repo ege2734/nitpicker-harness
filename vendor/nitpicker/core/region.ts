@@ -44,7 +44,7 @@ export async function rasterizeViewport(
   hostEl: Element,
   env: Env = ambientEnv(),
 ): Promise<RasterResult> {
-  const { default: html2canvas } = await import("html2canvas");
+  const { default: html2canvas } = await import("html2canvas-pro");
   const { doc, win } = env;
   const viewport = { w: win.innerWidth, h: win.innerHeight };
 
@@ -180,7 +180,7 @@ export function buildFrozenClone(
  *  compositor expects. html2canvas snapshots the holder synchronously into its own clone at call time, so
  *  the caller may detach the holder as soon as this settles. */
 export async function rasterizeFrozen(snapshot: FrozenSnapshot, scale: number): Promise<RasterResult> {
-  const { default: html2canvas } = await import("html2canvas");
+  const { default: html2canvas } = await import("html2canvas-pro");
   await snapshot.decode; // ensure canvas→img replacements have decoded before we paint
   const { holder, viewport } = snapshot;
   const canvas = await html2canvas(holder, {

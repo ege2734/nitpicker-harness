@@ -6,7 +6,7 @@ import { defineConfig } from "vitest/config";
 //     sidecar drain), carried over verbatim to prove the copied code still behaves after vendoring.
 //
 // jsdom globally: the DOM-facing units drive fake element/canvas/fiber objects, and the node sidecar
-// unit only touches node:events (available under the jsdom env). html2canvas is a dependency so
+// unit only touches node:events (available under the jsdom env). html2canvas-pro is a dependency so
 // core/region.ts's dynamic import resolves at transform time; no unit executes that path.
 export default defineConfig({
   test: {

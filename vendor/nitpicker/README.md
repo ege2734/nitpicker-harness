@@ -76,3 +76,12 @@ it is **not** upstreamed — preserve it on every re-sync (do NOT blind-copy `re
   and `core/elements.ts` were listed for this pass but are already ambient-free (element/canvas-relative
   math only), so they're reused verbatim — as are `react/react-source.ts` (fiber walk off the passed node).
   Covered by `tests/env-seam.test.ts`. Preserve on re-sync (same rule as the deltas above).
+- **`core/region.ts` — the region rasterizer imports `html2canvas-pro`, not `html2canvas`.** Upstream
+  `html2canvas@1.4.1` cannot parse the modern `oklab()`/`oklch()`/`color()` CSS color functions and throws
+  `Attempting to parse an unsupported color function oklab` mid-capture — those colors reach computed styles
+  via `color-mix()` and modern design tokens (the Loom shell/DS emits them), so region-drag capture failed
+  outright in the builder. `html2canvas-pro` is a maintained, API-compatible drop-in fork that supports
+  oklab/oklch/color(); both dynamic `import(...)` sites in `rasterizeViewport`/`rasterizeFrozen` were
+  switched with no call-site change. The two tests that mock the module (`tests/hotkey.test.ts`,
+  `tests/env-seam.test.ts`) mock `html2canvas-pro`; `cli/verify.ts`'s `html2canvas` prod-leak MARKER still
+  matches (the fork's bundle retains the `html2canvas` substring). Preserve on re-sync.
