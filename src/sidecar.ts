@@ -30,8 +30,14 @@ export function startSidecar(port: number): ChildProcess {
   return spawn(process.execPath, [tsxCli, server], { stdio: "inherit", env });
 }
 
-/** Locate the precompiled sidecar bundle, if this is a built package. */
+/** Locate the precompiled sidecar bundle, if one exists. Unlike the browser-bundle probes (which must
+ *  rebundle from source in-repo so edits aren't masked by a stale dist), the sidecar is a stable vendored
+ *  transport, so an in-repo dev/tsx run happily reuses a built `dist/sidecar.js` when present — closer to
+ *  the shipped path and faster than the tsx fallback. */
 function builtSidecar(): string | null {
-  const built = join(HERE, "sidecar.js"); // bundled: dist/{cli,index}.js → dist/sidecar.js
-  return existsSync(built) ? built : null;
+  const candidates = [
+    join(HERE, "sidecar.js"), // bundled/installed: dist/{cli,index}.js → dist/sidecar.js
+    join(HERE, "..", "dist", "sidecar.js"), // in-repo dev/tsx: src/sidecar.ts → <root>/dist/sidecar.js
+  ];
+  return candidates.find((c) => existsSync(c)) ?? null;
 }

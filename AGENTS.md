@@ -302,11 +302,19 @@ deps are present there; only a real out-of-repo prod install exposes it (hence `
   still `bin/nitpicker-harness` (now a thin node launcher that `import()`s `dist/cli.js`). `prepare` +
   `prepack` run the build, so a **git-dependency** install (runs `prepare` with devDeps present) and an
   `npm publish` (runs `prepack`) both ship a runnable, tsx-free package; `files` includes `dist` + `vendor`.
-- **`src/*/build.ts` and `src/sidecar.ts` are dual-mode:** they prefer the prebuilt `dist/` artifact and
-  only fall back to esbuild-from-source / `tsx` (resolved via `require.resolve("tsx/cli")`) when no `dist/`
-  is present — i.e. an in-repo tsx/vitest run. `esbuild` is `await import()`ed **only** on that fallback so
-  it's never required in a clean consumer install. So both `npm test` (fallback path, no dist needed) and a
-  built package (prebuilt path) are green; `scripts/verify-pack.sh` guards the built/clean path.
+- **`src/*/build.ts` and `src/sidecar.ts` are dual-mode:** a built package serves the prebuilt `dist/`
+  artifact sitting next to the running module (`dist/browser/*.js` for the browser IIFEs, `dist/sidecar.js`
+  for the transport); an in-repo tsx/vitest run falls back to bundling the browser entries from source with
+  esbuild (`await import()`ed **only** on that fallback, so it's never required in a clean consumer install)
+  and to running the vendored TS sidecar under `tsx` (resolved via `require.resolve("tsx/cli")`). **The two
+  probes are deliberately asymmetric:** each `build.ts` looks ONLY at its own sibling `browser/` dir (absent
+  in-repo, where `HERE = src/<mode>`), so an in-repo run ALWAYS rebundles from source — a staleness guard,
+  because browser bundles churn constantly and a stale on-disk `dist/` would silently mask edits. The
+  sidecar probe adds a second candidate (`<root>/dist/sidecar.js`, one `..` up from `src/sidecar.ts`), so an
+  in-repo run REUSES a built `dist/sidecar.js` when present — safe and faster because the sidecar is a stable,
+  rarely-edited vendored transport — and only falls back to tsx for a source-only checkout. So both `npm test`
+  (fallback path, no dist needed) and a built package (prebuilt path) are green; `scripts/verify-pack.sh`
+  guards the built/clean path.
 - **Consumer contract for Loom:** import path is unchanged (`import { startEmbeddedBuilder, makeBackend,
   LOOM_BUILDER_SYSTEM_PROMPT, … } from "nitpicker-harness"` and the `nitpicker-harness` CLI command); only
   the resolved files moved from `src/*.ts` to `dist/*.js`. The `vendor/nitpicker/next/*` source-stamp files
