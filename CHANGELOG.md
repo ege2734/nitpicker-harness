@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Embedded-agent mode** — `nitpicker-harness <path-to-app>` owns the app's dev server (auto-detected
+  `next dev` / `vite` / `react-scripts start` / `scripts.dev`, or an explicit `--dev-cmd` binding `$PORT`)
+  and makes the side pane a **live agent you build with** (Claude Agent SDK in-process backend + SSE
+  gateway, with a `claude-cli` spawn fallback) instead of an external `poll`-drained queue. Strictly
+  additive: the feedback-proxy / builder-shell / sidecar / `poll` / Stop-hook paths are unchanged. Also
+  exposed as the `startEmbeddedBuilder()` library (`src/index.ts`), with `@anthropic-ai/claude-agent-sdk`
+  as an optional dependency and a `--no-agent` escape hatch to the classic sidecar sink.
 - Open-source governance: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue/PR templates,
   Dependabot config, and CI/license badges in the README.
 
