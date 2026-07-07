@@ -134,6 +134,25 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
     background; discarding a region just orphans the in-flight capture (never pushed → the late
     `removeMark(id)` on a capture failure is a harmless no-op). Guarded by `tests/annotate.test.ts`
     (confirm-attaches / cancel-discards / Esc / single-instance).
+  - **Persist-selection-until-commit (`InteractionLayer.showSelection`/`clearSelection`).** Ported from the
+    classic overlay's dim-bands + red-outline "persist until commit": while the annotate popup is open the
+    red selection box + a **dimmed backdrop over the preview** stay visible so the user sees exactly what they
+    framed. Implemented as a `#nh-selection` container clipped to the iframe rect (`overflow:hidden`) holding
+    a red box whose `box-shadow:0 0 0 9999px rgba(0,0,0,.45)` dims everything OUTSIDE it — a single-element
+    "dim with a hole", clipped so it never covers the chat rail; it sits just below the popup. `BuilderChrome`
+    drives it: `onMark` calls `showSelection(anchor)` (after `annotate.open`, which resolves any prior popup →
+    its `onCancel` → `clearSelection`); confirm/cancel call `clearSelection`. A fresh region drag also clears
+    it. The shell never calls these (it queues on release). Guarded by `tests/interaction.test.ts`.
+  - **Ported queued-mark UX at parity — `src/builder/queue.ts` (`buildQueueItem`).** The builder shipped a
+    minimal chip bar; this ports the classic prior art: the per-kind row (region/element/text-edit + source
+    chip + note preview + remove) mirrors `ShellChrome.render()`, and the **expandable detail** — click a row
+    to reveal the **red-boxed region SCREENSHOT** (full-res `_blob` object URL → `_thumb` data URL →
+    "capturing…/failed" placeholder) or the element/text-edit descriptor lines (component/source/selector/
+    testid/tag), plus a live-editable note — is ported from the overlay item modal (`openItemModal` +
+    `fillRegionBody`). `BuilderChrome.renderMarks` renders a scrollable column list with a count header,
+    tracks a single `expandedId`, and revokes region object URLs before each re-render. **It stays on the
+    live-SSE-agent sink** — marks + notes attach to the agent turn over the Agent Gateway; only the
+    queue/annotation UI was ported, NOT the sidecar/poll destination. Guarded by `tests/queue.test.ts`.
   - **Overlay-suppression is MODE-gated (no double UI):** the embedded builder pane drives element-pick /
     region / inline-edit from the PARENT against its iframe (the reused `InteractionLayer`/`Env` seam), so
     injecting the classic in-frame overlay dock+queue would be a redundant SECOND feedback UI over the same

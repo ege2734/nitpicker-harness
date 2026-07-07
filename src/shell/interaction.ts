@@ -84,6 +84,13 @@ export class InteractionLayer {
   private highlightLabel!: HTMLElement;
   private dragLayer!: HTMLElement;
   private dragOutline!: HTMLElement;
+  // Persistent selection visual (red box + dimmed backdrop over the rest of the preview) — shown while a
+  // host's per-mark annotate popup is open, so the user sees exactly what they framed while composing the
+  // note. Cleared only on commit/discard (see showSelection/clearSelection). Builder-pane only in practice;
+  // the classic shell queues on release and never calls these.
+  private selectionDim!: HTMLElement;
+  private selectionBox!: HTMLElement;
+  private selectionAnchor: ParentBox | null = null;
 
   // element-picker + drag state
   private hoverTarget: Element | null = null;
@@ -120,6 +127,7 @@ export class InteractionLayer {
     window.addEventListener("resize", () => {
       if (this.mode === "region") this.fitDragLayer();
       this.repositionHighlight();
+      this.positionSelection();
     });
     // A navigation inside the iframe swaps its document: re-arm the active mode against the new one.
     this.frame?.addEventListener("load", () => this.onFrameLoad());
@@ -153,13 +161,64 @@ export class InteractionLayer {
     drag.appendChild(outline);
     drag.addEventListener("mousedown", this.onDragStart);
 
+    // Persistent selection visual (ported from the classic overlay's dim bands + red outline, which stay on
+    // screen "until commit"): a container clipped to the iframe rect (overflow:hidden) holding a red box whose
+    // huge box-shadow spread dims everything OUTSIDE it — a single-element "dim backdrop with a hole" that the
+    // overflow clip keeps inside the preview (never over the chat rail). Sits just below the annotate popup.
+    const dim = document.createElement("div");
+    dim.id = "nh-selection";
+    dim.style.cssText =
+      "position:fixed;display:none;pointer-events:none;overflow:hidden;z-index:2147483000;";
+    const selBox = document.createElement("div");
+    selBox.style.cssText =
+      "position:absolute;box-sizing:border-box;border:2px solid #ff3b30;border-radius:2px;" +
+      "box-shadow:0 0 0 9999px rgba(0,0,0,.45);";
+    dim.appendChild(selBox);
+
     layer.append(drag, hl);
-    document.body.appendChild(layer);
+    document.body.append(layer, dim);
     this.overlayLayer = layer;
     this.highlightBox = hl;
     this.highlightLabel = label;
     this.dragLayer = drag;
     this.dragOutline = outline;
+    this.selectionDim = dim;
+    this.selectionBox = selBox;
+  }
+
+  // ---- persistent selection visual (host-driven: shown while an annotate popup is open) ----
+  /** Show the red selection box + dimmed backdrop over the preview at `anchor` (parent-viewport rect), and
+   *  keep it until {@link clearSelection}. No-op without an anchor/frame. Used by the builder pane so the
+   *  user sees exactly what they framed while typing the note (the classic "persist selection until commit").*/
+  showSelection(anchor?: ParentBox): void {
+    if (!anchor || !this.frame) return;
+    this.selectionAnchor = anchor;
+    this.positionSelection();
+    this.selectionDim.style.display = "block";
+  }
+
+  /** Tear down the persistent selection visual (called on Queue/Cancel — the commit/discard boundary). */
+  clearSelection(): void {
+    this.selectionAnchor = null;
+    this.selectionDim.style.display = "none";
+  }
+
+  private positionSelection(): void {
+    const anchor = this.selectionAnchor;
+    if (!anchor || !this.frame) return;
+    const f = this.frame.getBoundingClientRect();
+    Object.assign(this.selectionDim.style, {
+      left: `${f.left}px`,
+      top: `${f.top}px`,
+      width: `${f.width}px`,
+      height: `${f.height}px`,
+    });
+    Object.assign(this.selectionBox.style, {
+      left: `${anchor.left - f.left}px`,
+      top: `${anchor.top - f.top}px`,
+      width: `${anchor.width}px`,
+      height: `${anchor.height}px`,
+    });
   }
 
   // ---- mode state machine ----
@@ -302,6 +361,8 @@ export class InteractionLayer {
   private onDragStart = (e: MouseEvent): void => {
     if (this.mode !== "region" || !this.frame) return;
     e.preventDefault();
+    // A fresh drag supersedes any lingering persistent selection from a prior (unresolved) mark.
+    this.clearSelection();
     this.dragFrame = this.frame.getBoundingClientRect();
     this.dragStart = { x: e.clientX, y: e.clientY };
     this.dragOutline.style.display = "block";

@@ -13,6 +13,7 @@ import type { ParentBox } from "../shell/geometry";
 import type { AgentEvent } from "../agent/backend";
 import { AgentGatewayClient } from "./client";
 import { AnnotationPopup, annotateLabel } from "./annotate";
+import { buildQueueItem } from "./queue";
 
 function readConfig(): { session: string; endpoint: string } {
   const fallback = { session: "nitpicker", endpoint: "http://127.0.0.1:5178" };
@@ -33,7 +34,9 @@ function readConfig(): { session: string; endpoint: string } {
 class BuilderChrome implements InteractionSink {
   private readonly client: AgentGatewayClient;
   private readonly annotate = new AnnotationPopup();
+  private readonly interaction: InteractionLayer;
   private pendingMarks: QueueItem[] = [];
+  private expandedId: string | null = null;
   private sending = false;
   private busy = false;
   private currentAssistant: HTMLElement | null = null;
@@ -49,8 +52,9 @@ class BuilderChrome implements InteractionSink {
 
   constructor(session: string, endpoint: string) {
     this.client = new AgentGatewayClient(session, endpoint);
-    // Interaction layer produces marks; its sink is `this`.
-    new InteractionLayer(this);
+    // Interaction layer produces marks; its sink is `this`. Kept so we can drive the persistent selection
+    // visual (red box + dim backdrop) while an annotate popup is open.
+    this.interaction = new InteractionLayer(this);
     this.wire();
     this.renderMarks();
     void this.hydrate();
@@ -64,26 +68,33 @@ class BuilderChrome implements InteractionSink {
   onMark(item: QueueItem, anchor?: ParentBox): void {
     // Restore the classic per-mark confirm/annotate step: instead of silently auto-attaching, open a popup
     // near the selection so the user can add a note and confirm — or discard the mark entirely (Esc/Cancel).
+    // The persistent selection visual (red box + dimmed backdrop, classic "persist until commit") stays up the
+    // whole time the popup is open. `open()` first resolves any prior popup (→ its onCancel → clearSelection),
+    // so show the NEW selection AFTER opening.
     this.annotate.open(
       anchor,
       {
         onConfirm: (note) => {
           item.text = note;
           this.pendingMarks.push(item);
+          this.interaction.clearSelection();
           this.renderMarks();
           this.setStatus(note ? "Mark attached." : "Mark attached (no note).", "ok");
         },
         onCancel: () => {
           // Never pushed to pendingMarks, so nothing to remove; any in-flight region raster just resolves
           // into an orphaned item that's GC'd. removeMark(id) on a late capture failure is a harmless no-op.
+          this.interaction.clearSelection();
           this.setStatus("Mark discarded.");
         },
       },
       { label: annotateLabel(item.kind) },
     );
+    this.interaction.showSelection(anchor);
   }
   removeMark(id: string): void {
     this.pendingMarks = this.pendingMarks.filter((i) => i.id !== id);
+    if (this.expandedId === id) this.expandedId = null;
     this.renderMarks();
   }
   onCaptureSettled(): void {
@@ -237,35 +248,45 @@ class BuilderChrome implements InteractionSink {
   }
 
   private renderMarks(): void {
+    // Revoke any full-res object URLs from the previous render (region previews) before rebuilding.
+    this.marksEl.querySelectorAll("img.nh-item-img").forEach((img) => {
+      const s = (img as HTMLImageElement).src;
+      if (s.startsWith("blob:")) URL.revokeObjectURL(s);
+    });
     this.marksEl.textContent = "";
+
+    if (this.pendingMarks.length === 0) {
+      this.marksEl.style.display = "none";
+      return;
+    }
+    // Column list of expandable items (ported parity with the classic shell/overlay queue), with a count.
+    this.marksEl.style.cssText =
+      "display:flex;flex-direction:column;gap:6px;padding:8px 12px;border-top:1px solid #23272e;max-height:42vh;overflow-y:auto;";
+
+    const header = document.createElement("div");
+    header.className = "nh-marks-head";
+    header.textContent = `Queued marks · ${this.pendingMarks.length}`;
+    header.style.cssText = "font-size:10px;letter-spacing:.4px;text-transform:uppercase;color:#6b727c;";
+    this.marksEl.appendChild(header);
+
     for (const item of this.pendingMarks) {
-      const chip = document.createElement("span");
-      chip.className = "nh-chip";
-      const label = document.createElement("span");
-      label.textContent = chipLabel(item);
-      chip.appendChild(label);
-      const src = item.element?.source;
-      if (src) {
-        const s = document.createElement("span");
-        s.className = "nh-src";
-        s.textContent = src;
-        chip.appendChild(s);
-      }
-      if (item.text) {
-        const note = document.createElement("span");
-        note.className = "nh-chip-note";
-        note.textContent = item.text;
-        note.style.cssText = "color:#c7cdd6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;";
-        chip.appendChild(note);
-      }
-      const del = document.createElement("button");
-      del.className = "nh-del";
-      del.type = "button";
-      del.setAttribute("aria-label", "Remove mark");
-      del.textContent = "×";
-      del.addEventListener("click", () => this.removeMark(item.id));
-      chip.appendChild(del);
-      this.marksEl.appendChild(chip);
+      this.marksEl.appendChild(
+        buildQueueItem(
+          item,
+          {
+            onRemove: (id) => this.removeMark(id),
+            onToggle: (id) => {
+              this.expandedId = this.expandedId === id ? null : id;
+              this.renderMarks();
+            },
+            onNoteChange: (id, note) => {
+              const it = this.pendingMarks.find((m) => m.id === id);
+              if (it) it.text = note;
+            },
+          },
+          this.expandedId === item.id,
+        ),
+      );
     }
   }
 
@@ -283,19 +304,6 @@ class BuilderChrome implements InteractionSink {
 
   private scrollToEnd(): void {
     this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
-  }
-}
-
-function chipLabel(item: QueueItem): string {
-  switch (item.kind) {
-    case "region":
-      return item._error ? "region ✕" : item._blob ? "region ✓" : "region…";
-    case "element":
-      return item.element?.component ? `⬡ ${item.element.component}` : item.element?.selector ?? "element";
-    case "text-edit":
-      return `✎ “${item.oldText ?? ""}” → “${item.newText ?? ""}”`;
-    default:
-      return "message";
   }
 }
 
