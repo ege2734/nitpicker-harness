@@ -195,9 +195,10 @@ class BuilderChrome implements InteractionSink {
         await Promise.all(pending);
       }
       const uploadable = marks.filter((i) => !(i.kind === "region" && !i._blob));
-      // Persist the sent batch as an expandable history entry (above the agent's streamed reply).
-      this.appendSentTurn(batch);
       await this.client.send(text, uploadable);
+      // Only after a successful send: persist the sent batch as an expandable history entry (above the
+      // agent's streamed reply) and clear the queue. On failure the queue stays intact for retry.
+      this.appendSentTurn(batch);
       this.pendingMarks = [];
       this.expandedId = null;
       this.renderMarks();
