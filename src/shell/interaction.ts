@@ -14,7 +14,7 @@ import { baseDescriptor } from "../../vendor/nitpicker/core/elements";
 import type { Env } from "../../vendor/nitpicker/core/env";
 import { resolveReactElement } from "../../vendor/nitpicker/react/react-source";
 import type { ElementDescriptor, QueueItem, Rect, Viewport } from "../../vendor/nitpicker/core/types";
-import { dragBox, elementRectInParent, parentPointToIframe } from "./geometry";
+import { dragBox, elementRectInParent, parentPointToIframe, type ParentBox } from "./geometry";
 
 export type Mode = "cursor" | "region" | "element" | "edit";
 
@@ -22,8 +22,10 @@ export type Mode = "cursor" | "region" | "element" | "edit";
 export interface InteractionSink {
   /** Consume + clear the compose note to attach to the next pick (or "" for none). */
   takeNote(): string;
-  /** A completed mark. For `region`, `_pending` is attached and resolves when the raster is ready. */
-  onMark(item: QueueItem): void;
+  /** A completed mark. For `region`, `_pending` is attached and resolves when the raster is ready. `anchor`
+   *  is the mark's selection rect in PARENT-viewport coords (region drag box / element/edit highlight box),
+   *  best-effort — a host can use it to place a per-mark annotate popup near the selection. */
+  onMark(item: QueueItem, anchor?: ParentBox): void;
   /** Drop a mark the host is already showing (a region whose capture failed). */
   removeMark(id: string): void;
   /** Status line for the host chrome. */
@@ -343,7 +345,9 @@ export class InteractionLayer {
     const capture = captureRegion(rect, scale, dummyHost, env.win.innerWidth, env).then(
       ({ blob, thumb }) => ({ blob, thumb }),
     );
-    this.enqueueRegion(rect, capture);
+    // The drag box in PARENT-viewport coords — the anchor for a per-mark annotate popup.
+    const anchor = dragBox(start.x, start.y, e.clientX, e.clientY);
+    this.enqueueRegion(rect, capture, anchor);
   };
 
   private updateDragOutline(curX: number, curY: number): void {
@@ -369,17 +373,25 @@ export class InteractionLayer {
   private enqueueElement(target: Element): void {
     const descriptor = { ...baseDescriptor(target), ...resolveReactElement(target) };
     const { href, route } = iframeLocation(this.frame);
-    this.sink.onMark({
-      id: uuid(),
-      kind: "element",
-      text: this.sink.takeNote(),
-      pageUrl: href,
-      route,
-      viewport: frameViewport(this.frame),
-      timestamp: new Date().toISOString(),
-      element: descriptor,
-    });
+    const anchor = this.frame
+      ? elementRectInParent(target.getBoundingClientRect(), this.frame.getBoundingClientRect())
+      : undefined;
+    // setStatus first, onMark last — so a host that opens an annotate popup in onMark has the final say
+    // over the status line (the shell just clears it; behavior is unchanged there).
     this.sink.setStatus("");
+    this.sink.onMark(
+      {
+        id: uuid(),
+        kind: "element",
+        text: this.sink.takeNote(),
+        pageUrl: href,
+        route,
+        viewport: frameViewport(this.frame),
+        timestamp: new Date().toISOString(),
+        element: descriptor,
+      },
+      anchor,
+    );
     this.setMode("cursor");
   }
 
@@ -448,30 +460,46 @@ export class InteractionLayer {
       this.sink.setStatus("");
       return;
     }
-    this.enqueueTextEdit(descriptor, oldText, newText);
+    const anchor = this.frame
+      ? elementRectInParent(el.getBoundingClientRect(), this.frame.getBoundingClientRect())
+      : undefined;
+    this.enqueueTextEdit(descriptor, oldText, newText, anchor);
   }
 
-  private enqueueTextEdit(descriptor: ElementDescriptor, oldText: string, newText: string): void {
+  private enqueueTextEdit(
+    descriptor: ElementDescriptor,
+    oldText: string,
+    newText: string,
+    anchor?: ParentBox,
+  ): void {
     const { href, route } = iframeLocation(this.frame);
-    this.sink.onMark({
-      id: uuid(),
-      kind: "text-edit",
-      text: this.sink.takeNote(),
-      pageUrl: href,
-      route,
-      viewport: frameViewport(this.frame),
-      timestamp: new Date().toISOString(),
-      element: descriptor,
-      oldText,
-      newText,
-    });
+    // setStatus first, onMark last — see enqueueElement: a host opening an annotate popup owns the status.
     this.sink.setStatus(
       descriptor.source ? `Text edit queued · ${descriptor.source}` : "Text edit queued",
       "ok",
     );
+    this.sink.onMark(
+      {
+        id: uuid(),
+        kind: "text-edit",
+        text: this.sink.takeNote(),
+        pageUrl: href,
+        route,
+        viewport: frameViewport(this.frame),
+        timestamp: new Date().toISOString(),
+        element: descriptor,
+        oldText,
+        newText,
+      },
+      anchor,
+    );
   }
 
-  private enqueueRegion(rect: Rect, capture: Promise<{ blob: Blob; thumb: string }>): void {
+  private enqueueRegion(
+    rect: Rect,
+    capture: Promise<{ blob: Blob; thumb: string }>,
+    anchor?: ParentBox,
+  ): void {
     const { href, route } = iframeLocation(this.frame);
     const item: QueueItem = {
       id: uuid(),
@@ -483,7 +511,8 @@ export class InteractionLayer {
       timestamp: new Date().toISOString(),
       image: { mime: "image/png", hasRedBox: true, selectionRect: rect },
     };
-    this.sink.onMark(item);
+    this.sink.setStatus("");
+    this.sink.onMark(item, anchor);
     item._pending = capture
       .then(({ blob, thumb }) => {
         item._blob = blob;
@@ -498,7 +527,6 @@ export class InteractionLayer {
         item._pending = undefined;
         this.sink.onCaptureSettled();
       });
-    this.sink.setStatus("");
     this.setMode("cursor");
   }
 }

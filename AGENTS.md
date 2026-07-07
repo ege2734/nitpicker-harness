@@ -117,7 +117,23 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
     (`src/builder/entry.ts`) swaps in the gateway client (`src/builder/client.ts`) + a streaming transcript.
     `src/builder/{entry,build}.ts` + `inject.ts:builderPage()` serve the new `/__nitpicker-harness/build[.js]`
     pane (sibling of the shell). Extraction is behavior-preserving — guarded by `tests/interaction.test.ts`
-    + the unchanged `tests/shell-geometry.test.ts` / vendor `env-seam.test.ts`.
+    + the unchanged `tests/shell-geometry.test.ts` / vendor `env-seam.test.ts`. **`InteractionSink.onMark`
+    takes an optional `anchor?: ParentBox`** — the mark's selection rect in PARENT-viewport coords (region
+    drag box / element+edit highlight box), so a host can place a per-mark popup near the selection. The
+    layer sets status BEFORE calling `onMark` on all three producers (element/region/text-edit) so the host's
+    `onMark` has the final word on the status line; the shell just clears it (unchanged), the builder uses it.
+  - **Per-mark annotate popup (builder-pane only) — `src/builder/annotate.ts`.** The extracted
+    `InteractionLayer` originally had `BuilderChrome.onMark` **silently** auto-attach every mark to the
+    composer. That dropped the classic feedback-overlay confirm step, so the user never got to annotate or
+    reject a mark. `BuilderChrome.onMark` now opens an `AnnotationPopup` near the mark's `anchor`: a note
+    input + **Queue** (confirm → `item.text = note`, push to `pendingMarks`, render the chip) / **Cancel**
+    (Esc or button → **discard**, never queued). Enter confirms, empty note is allowed (optional). It's a
+    single-instance parent-window popup with self-contained inline styles (dark builder chrome), so it needs
+    no server-rendered markup. **The classic shell keeps its silent auto-queue** (`ShellChrome.onMark` just
+    pushes) — the popup is builder-only. Region marks show the popup while the html2canvas raster runs in the
+    background; discarding a region just orphans the in-flight capture (never pushed → the late
+    `removeMark(id)` on a capture failure is a harmless no-op). Guarded by `tests/annotate.test.ts`
+    (confirm-attaches / cancel-discards / Esc / single-instance).
   - **Overlay-suppression is MODE-gated (no double UI):** the embedded builder pane drives element-pick /
     region / inline-edit from the PARENT against its iframe (the reused `InteractionLayer`/`Env` seam), so
     injecting the classic in-frame overlay dock+queue would be a redundant SECOND feedback UI over the same

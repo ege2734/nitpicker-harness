@@ -9,8 +9,10 @@
 // SYNCHRONOUSLY at module load (currentScript is only non-null then; see AGENTS.md).
 import type { QueueItem } from "../../vendor/nitpicker/core/types";
 import { InteractionLayer, type InteractionSink } from "../shell/interaction";
+import type { ParentBox } from "../shell/geometry";
 import type { AgentEvent } from "../agent/backend";
 import { AgentGatewayClient } from "./client";
+import { AnnotationPopup, annotateLabel } from "./annotate";
 
 function readConfig(): { session: string; endpoint: string } {
   const fallback = { session: "nitpicker", endpoint: "http://127.0.0.1:5178" };
@@ -30,6 +32,7 @@ function readConfig(): { session: string; endpoint: string } {
 
 class BuilderChrome implements InteractionSink {
   private readonly client: AgentGatewayClient;
+  private readonly annotate = new AnnotationPopup();
   private pendingMarks: QueueItem[] = [];
   private sending = false;
   private busy = false;
@@ -58,9 +61,26 @@ class BuilderChrome implements InteractionSink {
     // In embedded mode the composer text IS the turn message; marks carry only their descriptor.
     return "";
   }
-  onMark(item: QueueItem): void {
-    this.pendingMarks.push(item);
-    this.renderMarks();
+  onMark(item: QueueItem, anchor?: ParentBox): void {
+    // Restore the classic per-mark confirm/annotate step: instead of silently auto-attaching, open a popup
+    // near the selection so the user can add a note and confirm — or discard the mark entirely (Esc/Cancel).
+    this.annotate.open(
+      anchor,
+      {
+        onConfirm: (note) => {
+          item.text = note;
+          this.pendingMarks.push(item);
+          this.renderMarks();
+          this.setStatus(note ? "Mark attached." : "Mark attached (no note).", "ok");
+        },
+        onCancel: () => {
+          // Never pushed to pendingMarks, so nothing to remove; any in-flight region raster just resolves
+          // into an orphaned item that's GC'd. removeMark(id) on a late capture failure is a harmless no-op.
+          this.setStatus("Mark discarded.");
+        },
+      },
+      { label: annotateLabel(item.kind) },
+    );
   }
   removeMark(id: string): void {
     this.pendingMarks = this.pendingMarks.filter((i) => i.id !== id);
@@ -230,6 +250,13 @@ class BuilderChrome implements InteractionSink {
         s.className = "nh-src";
         s.textContent = src;
         chip.appendChild(s);
+      }
+      if (item.text) {
+        const note = document.createElement("span");
+        note.className = "nh-chip-note";
+        note.textContent = item.text;
+        note.style.cssText = "color:#c7cdd6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;";
+        chip.appendChild(note);
       }
       const del = document.createElement("button");
       del.className = "nh-del";
