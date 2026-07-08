@@ -142,6 +142,7 @@ const client = createHarnessEmbedClient({
   onMarkUpdated: (u)      => store.attachShot(u.id, u.image?.blob),  // region screenshot (Blob) arrived, or u.error
   onMarkRemoved: (id)     => store.remove(id),         // a mark was withdrawn (e.g. a failed region capture)
   onStatus:      (s)      => statusBar.set(s.message), // best-effort status line
+  onMode:        (mode)   => toolbar.setActive(mode),  // active mode changed (incl. auto-revert to cursor)
   onReady:       ()       => {/* bridge handshaked */},
 });
 await client.ready;
@@ -165,6 +166,7 @@ only from a configured trusted origin and posts events with an explicit target o
 | frame → host | `mark-updated` | `id`, `image?: { mime, blob, thumb }`, `error?` |
 | frame → host | `mark-removed` | `id` |
 | frame → host | `status` | `message`, `kind?: "ok" \| "err"` |
+| frame → host | `mode` | `mode: "cursor" \| "region" \| "element" \| "edit"` (echoes every transition, incl. auto-revert) |
 
 The persistent selection visual (red box + dimmed backdrop over the framed app) is rendered in-frame by the
 harness; your host renders the queue/annotate UI. The `WireItem` is exactly what the `/build` pane and

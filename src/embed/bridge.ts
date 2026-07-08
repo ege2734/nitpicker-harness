@@ -94,6 +94,10 @@ export class EmbedBridge {
     this.send({ type: "status", message, kind });
   }
 
+  emitMode(mode: EmbedMode): void {
+    this.send({ type: "mode", mode });
+  }
+
   destroy(): void {
     this.win.removeEventListener("message", this.onMessage);
   }

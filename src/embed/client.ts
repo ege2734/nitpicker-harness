@@ -26,6 +26,7 @@ import {
   type MarkEvent,
   type MarkRemovedEvent,
   type MarkUpdatedEvent,
+  type ModeEvent,
   type StatusEvent,
 } from "./protocol";
 import type { WireItem } from "../agent/backend";
@@ -45,6 +46,9 @@ export interface HarnessEmbedClientOptions {
   onMarkRemoved?: (id: string) => void;
   /** Best-effort status line from the in-frame layer. */
   onStatus?: (status: { message: string; kind?: "ok" | "err" }) => void;
+  /** The in-frame interaction mode changed — echoes EVERY transition, including the auto-revert to `cursor`
+   *  after a mark or an in-frame Escape, so the host can keep its toolbar in sync without re-deriving it. */
+  onMode?: (mode: EmbedMode) => void;
   /** The bridge handshake completed (also resolves the `ready` promise). May fire more than once. */
   onReady?: () => void;
   /** Window to listen on / drive from. Default: the ambient `window`. Injectable for tests. */
@@ -107,6 +111,9 @@ export function createHarnessEmbedClient(opts: HarnessEmbedClientOptions): Harne
         opts.onStatus?.({ message: d.message, kind: d.kind });
         break;
       }
+      case "mode":
+        opts.onMode?.((ev.data as ModeEvent).mode);
+        break;
     }
   };
 

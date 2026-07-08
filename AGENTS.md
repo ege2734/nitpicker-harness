@@ -239,7 +239,12 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
     drift. **Host→frame commands**: `hello` (handshake), `setMode {cursor|region|element|edit}`,
     `clearSelection` — tagged `source:"nitpicker-embed-host"`. **Frame→host events**: `ready {modes}`,
     `mark {item:WireItem}`, `mark-updated {id, image:{mime,blob,thumb} | error}`, `mark-removed {id}`,
-    `status {message,kind}` — tagged `source:"nitpicker-embed"`.
+    `status {message,kind}`, `mode {mode}` — tagged `source:"nitpicker-embed"`. The `mode` event **echoes every
+    active-mode transition** — a host-driven `setMode` AND the layer's own auto-revert to `cursor` after a mark
+    or an in-frame Escape — so a host that treats the bridge as the source of truth for the active mode never
+    shows a stale `picking` state (the in-frame layer has no toolbar of its own). It's driven by an OPTIONAL
+    `InteractionLayer` `onModeChange` hook (2nd ctor arg, fired only on a real change) that the shell/`build`
+    pane leave undefined — so those modes are byte-for-byte unaffected.
   - `src/embed/bridge.ts` — the IN-FRAME half (`EmbedBridge`): origin-checks every inbound message against the
     configured allow-list (untrusted → dropped), applies commands via injected `onSetMode`/`onClearSelection`
     callbacks (wired to `InteractionLayer.setMode`/`clearSelection`), and posts events to the confirmed host
@@ -255,7 +260,7 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
     region capture failure the layer's `removeMark` (→ `mark-removed`) precedes the settle, so the host learns
     of the withdrawal. Split out of the entry so its async-relay logic is unit-testable without html2canvas.
   - `src/embed/client.ts` — the HOST-SIDE helper `createHarnessEmbedClient({iframe, origin, onMark,
-    onMarkUpdated, onMarkRemoved, onStatus, onReady})` → `{ setMode, clearSelection, ready, destroy }`. The ONE
+    onMarkUpdated, onMarkRemoved, onStatus, onMode, onReady})` → `{ setMode, clearSelection, ready, destroy }`. The ONE
     clean API a host imports (re-exported from the package root) instead of hand-writing postMessage plumbing.
     Environment-agnostic (pure `window`/`postMessage`, injectable `window` for tests); inbound events are
     accepted ONLY from `opts.origin` (plus a best-effort `source === iframe.contentWindow` check when

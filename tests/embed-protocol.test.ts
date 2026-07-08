@@ -55,6 +55,7 @@ describe("embed protocol — message narrowing", () => {
     expect(isHostCommand({ source: HOST_SOURCE })).toBe(false); // no type
 
     expect(isFrameEvent({ source: FRAME_SOURCE, v: 1, type: "ready", modes: [] })).toBe(true);
+    expect(isFrameEvent({ source: FRAME_SOURCE, v: 1, type: "mode", mode: "region" })).toBe(true);
     expect(isFrameEvent({ source: HOST_SOURCE, v: 1, type: "hello" })).toBe(false);
   });
   it("isEmbedMode only accepts the four known modes", () => {

@@ -86,7 +86,22 @@ export interface StatusEvent {
   message: string;
   kind?: "ok" | "err";
 }
-export type FrameEvent = ReadyEvent | MarkEvent | MarkUpdatedEvent | MarkRemovedEvent | StatusEvent;
+/** The in-frame interaction mode changed. Echoes EVERY transition — a host-driven `setMode` AND the layer's
+ *  own auto-revert to `cursor` after producing a mark or on an in-frame Escape — so a host that treats the
+ *  bridge as the source of truth for the active mode never shows a stale `picking` state. */
+export interface ModeEvent {
+  source: typeof FRAME_SOURCE;
+  v: number;
+  type: "mode";
+  mode: EmbedMode;
+}
+export type FrameEvent =
+  | ReadyEvent
+  | MarkEvent
+  | MarkUpdatedEvent
+  | MarkRemovedEvent
+  | StatusEvent
+  | ModeEvent;
 
 /** Omit that distributes over a discriminated union (plain `Omit` collapses a union to its shared keys). */
 export type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;

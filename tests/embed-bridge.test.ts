@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EmbedBridge } from "../src/embed/bridge";
 import { EmbedSink } from "../src/embed/sink";
 import { createHarnessEmbedClient } from "../src/embed/client";
+import { InteractionLayer, type InteractionSink } from "../src/shell/interaction";
 import type { QueueItem } from "../vendor/nitpicker/core/types";
 
 const HOST = "https://loom.example"; // the outer host page (frames the embed page)
@@ -194,6 +195,56 @@ describe("embed bridge — host ⇆ frame round trip", () => {
     expect(r.bridgeParent.targets.every((t) => t === HOST)).toBe(true);
     expect([...r.iframeContent.targets, ...r.bridgeParent.targets]).not.toContain("*");
     r.destroy();
+  });
+});
+
+describe("embed bridge — mode echo (frame → host)", () => {
+  const noopSink: InteractionSink = {
+    takeNote: () => "",
+    onMark: () => {},
+    removeMark: () => {},
+    setStatus: () => {},
+    onCaptureSettled: () => {},
+  };
+
+  it("echoes a host-driven setMode AND the layer's own auto-revert (Escape) back to the host", () => {
+    const bridgeParent = poster(HARNESS); // bridge → host
+    const iframeContent = poster(HOST); // client → frame
+    let bridge!: EmbedBridge;
+    // A REAL InteractionLayer so the auto-revert path (Escape → setMode('cursor')) is genuinely exercised;
+    // its onModeChange is wired to the bridge exactly as src/embed/entry.ts wires it.
+    const layer = new InteractionLayer(noopSink, (mode) => bridge.emitMode(mode));
+    bridge = new EmbedBridge({
+      allowedOrigins: [HOST],
+      onSetMode: (m) => layer.setMode(m),
+      onClearSelection: () => layer.clearSelection(),
+      window,
+      parent: bridgeParent as unknown as Window,
+    });
+
+    const onMode = vi.fn();
+    const iframe = {
+      contentWindow: iframeContent as unknown as Window,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    } as unknown as HTMLIFrameElement;
+    const client = createHarnessEmbedClient({ iframe, origin: HARNESS, window, onMode });
+
+    // 1) Host arms element mode → the layer applies it → the change is echoed back as a `mode` event.
+    client.setMode("element");
+    expect(onMode).toHaveBeenCalledWith("element");
+
+    // 2) An in-frame Escape auto-reverts the layer to cursor → that transition is echoed too (the host is
+    //    never left showing a stale 'picking' state after the layer reverts on its own).
+    onMode.mockClear();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(onMode).toHaveBeenCalledWith("cursor");
+
+    // Every echo targeted the explicit host origin, never a wildcard.
+    expect(bridgeParent.targets.every((t) => t === HOST)).toBe(true);
+
+    client.destroy();
+    bridge.destroy();
   });
 });
 

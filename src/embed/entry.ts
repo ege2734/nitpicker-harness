@@ -48,7 +48,7 @@ function mount(): void {
     onClearSelection: () => layerRef.current?.clearSelection(),
   });
   const sink = new EmbedSink(bridge);
-  const layer = new InteractionLayer(sink);
+  const layer = new InteractionLayer(sink, (mode) => bridge.emitMode(mode));
   sink.layer = layer;
   layerRef.current = layer;
   console.info(

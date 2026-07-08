@@ -106,7 +106,13 @@ export class InteractionLayer {
   private editOldHtml = "";
   private editCancelled = false;
 
-  constructor(private readonly sink: InteractionSink) {
+  /** Optional: notified AFTER the active mode actually changes (host-driven OR the auto-revert to `cursor`
+   *  after a mark / on Escape). Defaults to undefined, so the shell + /build pane are unaffected; the embed
+   *  bridge wires it to echo the mode back to its host. Never fires when setMode is a no-op. */
+  constructor(
+    private readonly sink: InteractionSink,
+    private readonly onModeChange?: (mode: Mode) => void,
+  ) {
     this.buildInteractionLayer();
     this.wire();
   }
@@ -240,6 +246,7 @@ export class InteractionLayer {
       this.dragLayer.style.display = "block";
       this.dragLayer.style.pointerEvents = "auto";
     }
+    this.onModeChange?.(mode);
   }
 
   private onFrameLoad(): void {
