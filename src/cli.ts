@@ -96,6 +96,7 @@ async function serve(args: string[]): Promise<void> {
   // Optional cross-frame embed bridge: --embed-origin <origin>[,<origin>…] trusts those host origins to
   // drive the chromeless /__nitpicker-harness/embed page. Omitted → the embed route is not served.
   const embedAllowedOrigins = parseOrigins(flag(args, "embed-origin"));
+  const embedMode = embedAllowedOrigins.length > 0;
 
   let sidecar: ChildProcess | null = null;
   if (runSidecar) {
@@ -118,17 +119,20 @@ async function serve(args: string[]): Promise<void> {
       `  ┌─────────────────────────────────────────────\n` +
       `  │ open:     ${harness.url}\n` +
       `  │ shell:    ${harness.url}/__nitpicker-harness/shell\n` +
-      (embedAllowedOrigins.length
+      (embedMode
         ? `  │ embed:    ${harness.url}/__nitpicker-harness/embed  (hosts: ${embedAllowedOrigins.join(", ")})\n`
         : "") +
       `  │ target:   ${target}\n` +
       `  │ sidecar:  ${endpoint}${runSidecar ? "" : "  (external — --no-sidecar)"}\n` +
       `  │ session:  ${session}\n` +
       `  └─────────────────────────────────────────────\n` +
-      `  • Feedback-proxy mode: open the app URL and mark up with the bottom-center dock.\n` +
-      `  • Builder-shell mode:  open the shell URL — persistent chat + queue in a parent frame.\n` +
-      `  Then in your agent run:\n` +
-      `      nitpicker-harness poll --session ${session}\n\n`,
+      (embedMode
+        ? `  • Embed-bridge mode: the classic in-frame dock is suppressed — an external host (${embedAllowedOrigins.join(", ")})\n` +
+          `    frames the embed URL and drives it over postMessage (createHarnessEmbedClient); marks relay to the host.\n\n`
+        : `  • Feedback-proxy mode: open the app URL and mark up with the bottom-center dock.\n` +
+          `  • Builder-shell mode:  open the shell URL — persistent chat + queue in a parent frame.\n` +
+          `  Then in your agent run:\n` +
+          `      nitpicker-harness poll --session ${session}\n\n`),
   );
 
   const shutdown = (): void => {
