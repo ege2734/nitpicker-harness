@@ -220,6 +220,63 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   lockstep for free. Tests: `tests/gateway.test.ts` (marks→prompt + SSE stream/resume + auth),
   `tests/runtime.test.ts` (dev-command detection + spawn/ready/stop), `tests/proxy-embed.test.ts` (pane +
   gateway mounted through the real proxy; classic paths still served).
+- **Cross-frame embed bridge (experience #3, additive) — `src/embed/*`.** The enabler for "one harness, many
+  hosts": an EXTERNAL host (Loom's own DS builder chrome) frames the harness and drives the SAME
+  `InteractionLayer` over the iframe boundary, receiving real `WireItem` marks — WITHOUT the host needing
+  same-origin DOM access to the framed app. The problem it solves: the real InteractionLayer (region/element/
+  text-edit → marks) lived ONLY inside the harness's own `/build` pane; a host that renders its own chrome and
+  shows the app in a cross-origin iframe can't read the framed DOM (SOP). The fix runs the InteractionLayer
+  **inside** a same-origin harness page and relays marks up over `postMessage`. The nesting:
+  `Loom host (loom origin)` → `<iframe> /__nitpicker-harness/embed (harness origin)` → `<iframe id=nh-frame>
+  the app (harness origin, proxied — SAME-ORIGIN with the embed page)`. So the InteractionLayer runs in the
+  **embed page** (same-origin with the app → region/element/edit all work) but renders **no chrome**; it's a
+  headless mark producer driven from, and reporting to, the outer host. **This is a new TRANSPORT around the
+  existing engine, not a fork** — the embed page reuses `InteractionLayer`/`Env`/geometry verbatim (the shell
+  and `/build` pane are byte-for-byte unchanged). The modules:
+  - `src/embed/protocol.ts` — the PURE wire contract (dependency-free): message shapes + `originAllowed`
+    (the security gate — never trusts `"*"`/empty), `parseOrigins`, `isHostCommand`/`isFrameEvent`/
+    `isEmbedMode`, and the `DistributiveOmit`-based envelope helpers. Both sides import it so the schema can't
+    drift. **Host→frame commands**: `hello` (handshake), `setMode {cursor|region|element|edit}`,
+    `clearSelection` — tagged `source:"nitpicker-embed-host"`. **Frame→host events**: `ready {modes}`,
+    `mark {item:WireItem}`, `mark-updated {id, image:{mime,blob,thumb} | error}`, `mark-removed {id}`,
+    `status {message,kind}` — tagged `source:"nitpicker-embed"`.
+  - `src/embed/bridge.ts` — the IN-FRAME half (`EmbedBridge`): origin-checks every inbound message against the
+    configured allow-list (untrusted → dropped), applies commands via injected `onSetMode`/`onClearSelection`
+    callbacks (wired to `InteractionLayer.setMode`/`clearSelection`), and posts events to the confirmed host
+    with an **explicit** target origin — NEVER `"*"`. The "confirmed host" is learned from the first trusted
+    inbound message (or defaults to the sole configured origin), so a mark — which can only follow a `setMode`
+    command — always has a known trusted destination. Announces `ready` on construction AND replies to `hello`
+    (covers either mount order). DOM-light (touches only `window`/`postMessage`), so it unit-tests without a
+    real iframe.
+  - `src/embed/sink.ts` — `EmbedSink` (`InteractionSink`): relays marks to the bridge instead of a local
+    queue. `onMark` emits the serialized `WireItem` immediately (region pixels raster async → `onCaptureSettled`
+    follows with the blob via `mark-updated`) and keeps the persistent selection visual (red box + dim) up over
+    the framed app — that's in-frame, same-origin — while leaving the queue/annotate UI to the host. On a
+    region capture failure the layer's `removeMark` (→ `mark-removed`) precedes the settle, so the host learns
+    of the withdrawal. Split out of the entry so its async-relay logic is unit-testable without html2canvas.
+  - `src/embed/client.ts` — the HOST-SIDE helper `createHarnessEmbedClient({iframe, origin, onMark,
+    onMarkUpdated, onMarkRemoved, onStatus, onReady})` → `{ setMode, clearSelection, ready, destroy }`. The ONE
+    clean API a host imports (re-exported from the package root) instead of hand-writing postMessage plumbing.
+    Environment-agnostic (pure `window`/`postMessage`, injectable `window` for tests); inbound events are
+    accepted ONLY from `opts.origin` (plus a best-effort `source === iframe.contentWindow` check when
+    resolvable). (Re)sends `hello` on iframe `load`.
+  - `src/embed/entry.ts` + `build.ts` — the browser entry (served at `EMBED_JS_PATH`) that wires `EmbedBridge`
+    + `EmbedSink` + `InteractionLayer` and reads its config (session + trusted `origins`) SYNCHRONOUSLY from
+    `document.currentScript` (same currentScript rule as the other entries — see the sharp edge below).
+  - `inject.ts:embedPage(cfg, allowedOrigins)` (route `/__nitpicker-harness/embed`) — the chromeless page: an
+    `<iframe id=nh-frame src="/">` + the embed bundle. **The trusted host origins are baked into the bundle URL
+    SERVER-side** (from `HarnessOptions.embedAllowedOrigins`), NEVER taken from the request, so the origin gate
+    can't be widened by a client. `server.ts` serves the route **only when `embedAllowedOrigins` is non-empty**
+    (fail-closed) and, like `builderPane`, suppresses the classic in-frame overlay when embed mode is on (the
+    app is driven from the parent — no double UI). A `"*"`-only list is treated as unconfigured. The library
+    surfaces it as `startEmbeddedBuilder({ embedAllowedOrigins })` → `embedUrl`; the CLI as
+    `--embed-origin <origin>[,…]` (both `--target` and embedded modes). Guarded by `tests/embed-protocol.test.ts`
+    (protocol + sink relay), `tests/embed-bridge.test.ts` (full host⇆frame round trip + origin rejection +
+    no-wildcard-target), `tests/proxy-embed-bridge.test.ts` (routes served/suppressed through the real proxy,
+    bundle builds), and `tests/inject.test.ts` (`embedPage`). Verified end-to-end in a real browser: a
+    `localhost` host framing a `127.0.0.1` harness (genuinely cross-origin) handshakes, drives
+    `setMode('element')`, and a real click in the doubly-nested app frame relays an `element` mark
+    (tag/testid/selector/text/route) to the host.
 - `src/hook.ts` — the **feedback driver**: a Claude-Code Stop-hook that parks on the sidecar's `/wait`
   (zero token cost) and, when a mark lands, emits `{"decision":"block","reason":…}` to re-invoke the
   agent to drain via `poll`. `decideStopHook` is a pure, injectable-transport core (unit-tested in

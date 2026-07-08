@@ -105,6 +105,72 @@ every edit). Override it per session with `--system-prompt <file>`, the `systemC
 env var, which wins over the default. Loom's own in-app builder consumes the identical persona by importing
 the export (or simply by not overriding `systemContext`, since the default already applies).
 
+### Embed bridge — drive the harness from *your own* chrome
+
+The region/element/edit → mark engine normally lives inside the harness's own `/build` pane. The **embed
+bridge** lets an **external host page** — e.g. a design-system builder that renders its *own* chat rail,
+mode toolbar, and queue — frame the harness and get the **same real marks** over a `postMessage` protocol,
+without needing same-origin DOM access to the framed app. (The browser's Same-Origin Policy blocks reading
+a cross-origin iframe's DOM; the harness sidesteps it by running the interaction engine *inside* a
+same-origin page it serves and relaying marks up to the host.)
+
+Enable it by configuring the trusted host origin(s); then the harness serves a chromeless embed page at
+`/__nitpicker-harness/embed` that your host frames:
+
+```bash
+# standalone / dev
+nitpicker-harness --target http://localhost:3000 --embed-origin https://your-host.example
+nitpicker-harness ./path/to/app --embed-origin https://your-host.example      # embedded mode too
+```
+
+```ts
+// as a library — startEmbeddedBuilder returns `embedUrl` when embedAllowedOrigins is set
+const b = await startEmbeddedBuilder({ appPath, proxyPort, sessionId,
+  embedAllowedOrigins: ["https://your-host.example"] });
+// b.embedUrl → https://<harness>/__nitpicker-harness/embed
+```
+
+**Host-side API.** Import one helper from the package instead of hand-writing postMessage plumbing:
+
+```ts
+import { createHarnessEmbedClient } from "nitpicker-harness";
+
+const client = createHarnessEmbedClient({
+  iframe,                            // the <iframe src="…/__nitpicker-harness/embed"> element
+  origin: "https://<harness-origin>",// where the embed page is served (target origin for commands)
+  onMark:        (mark)   => store.add(mark),          // a WireItem: kind, text, element{source/selector/…}, image{selectionRect}
+  onMarkUpdated: (u)      => store.attachShot(u.id, u.image?.blob),  // region screenshot (Blob) arrived, or u.error
+  onMarkRemoved: (id)     => store.remove(id),         // a mark was withdrawn (e.g. a failed region capture)
+  onStatus:      (s)      => statusBar.set(s.message), // best-effort status line
+  onReady:       ()       => {/* bridge handshaked */},
+});
+await client.ready;
+
+client.setMode("region");   // "cursor" | "region" | "element" | "edit" — drive the in-frame engine
+client.clearSelection();    // after your UI queues or discards a mark (clears the red-box/dim over the app)
+client.destroy();           // detach
+```
+
+**Message schema** (all messages carry `{ source, v: 1 }`; the host tags `source:"nitpicker-embed-host"`,
+the frame tags `source:"nitpicker-embed"`). The bridge is **origin-checked**: the frame honors commands
+only from a configured trusted origin and posts events with an explicit target origin — never `"*"`.
+
+| Direction | `type` | Payload |
+|---|---|---|
+| host → frame | `hello` | — (handshake; frame replies `ready`) |
+| host → frame | `setMode` | `mode: "cursor" \| "region" \| "element" \| "edit"` |
+| host → frame | `clearSelection` | — |
+| frame → host | `ready` | `modes: string[]` |
+| frame → host | `mark` | `item: WireItem` (region pixels arrive later) |
+| frame → host | `mark-updated` | `id`, `image?: { mime, blob, thumb }`, `error?` |
+| frame → host | `mark-removed` | `id` |
+| frame → host | `status` | `message`, `kind?: "ok" \| "err"` |
+
+The persistent selection visual (red box + dimmed backdrop over the framed app) is rendered in-frame by the
+harness; your host renders the queue/annotate UI. The `WireItem` is exactly what the `/build` pane and
+sidecar already produce (`source` `file:line:col` is the stable anchor). See [`AGENTS.md`](./AGENTS.md) →
+"Cross-frame embed bridge" for the internals.
+
 ### Keep the agent driven
 
 `poll` only delivers while the agent is actively running it — once a turn ends and the agent goes idle,
@@ -117,8 +183,8 @@ a mark queued while nothing is polling is never lost; it is delivered to the nex
 ### CLI
 
 ```
-nitpicker-harness <path-to-app> [--dev-cmd "<cmd>"] [--target-port <n>] [--port 4000] [--session nitpicker] [--agent claude|claude-cli] [--no-agent] [--system-prompt <file>]
-nitpicker-harness --target <url> [--port 4000] [--session nitpicker] [--sidecar-port 5178] [--no-sidecar]
+nitpicker-harness <path-to-app> [--dev-cmd "<cmd>"] [--target-port <n>] [--port 4000] [--session nitpicker] [--agent claude|claude-cli] [--no-agent] [--system-prompt <file>] [--embed-origin <origin>[,…]]
+nitpicker-harness --target <url> [--port 4000] [--session nitpicker] [--sidecar-port 5178] [--no-sidecar] [--embed-origin <origin>[,…]]
 nitpicker-harness poll --session <id> [--endpoint <url>] [--watch]
 nitpicker-harness stop-hook --session <id> [--endpoint <url>] [--timeoutMs <n>]   # turn-end driver hook
 nitpicker-harness pending --session <id> [--endpoint <url>]                       # cheap "is feedback queued?"
