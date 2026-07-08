@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   newlines), sent-turn history (flushed batches persist as expandable transcript entries above the reply),
   and sanitized, stream-safe **markdown** agent replies. Builder-pane only — the classic shell /
   feedback-proxy / sidecar / `poll` paths are unchanged.
+- **Cross-frame embed bridge** — an external host page (e.g. Loom's own builder chrome) can frame the
+  harness and drive the same region/element/edit → `WireItem` mark engine over an origin-checked
+  `postMessage` protocol, without needing same-origin DOM access to the framed app. Enabled by configuring
+  the trusted host origin(s) via `--embed-origin <origin>[,…]` (both `--target` and embedded modes) or
+  `startEmbeddedBuilder({ embedAllowedOrigins })` → `embedUrl`; the harness then serves a chromeless embed
+  page at `/__nitpicker-harness/embed` (served only when configured — fail-closed). Hosts import
+  `createHarnessEmbedClient({ iframe, origin, … })` from the package root to `setMode`/`clearSelection` and
+  receive `mark`/`mark-updated`/`mark-removed`/`status`/`mode` events. Strictly additive: the `/build` pane,
+  feedback-proxy, and builder-shell modes are unchanged; embed mode suppresses the classic in-frame overlay
+  (like `builderPane`) so there is no double UI.
 - Open-source governance: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue/PR templates,
   Dependabot config, and CI/license badges in the README.
 

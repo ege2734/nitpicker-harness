@@ -11,6 +11,7 @@
 //        - dist/browser/overlay.js   injected feedback overlay
 //        - dist/browser/shell.js     builder-shell parent chrome
 //        - dist/browser/builder.js   embedded builder pane
+//        - dist/browser/embed.js     cross-frame embed bridge (in-frame mark producer for an external host)
 //      These are served verbatim by the proxy at runtime (src/*/build.ts prefers the prebuilt file and only
 //      falls back to esbuild-from-source in dev/test), so esbuild + html2canvas-pro are BUILD-only devDeps.
 //
@@ -72,6 +73,7 @@ async function main() {
     browser(src("overlay", "entry.ts"), "overlay.js", { "process.env.NODE_ENV": '"development"' }),
     browser(src("shell", "entry.ts"), "shell.js"),
     browser(src("builder", "entry.ts"), "builder.js"),
+    browser(src("embed", "entry.ts"), "embed.js"),
   ]);
 
   process.stdout.write("nitpicker-harness: build complete → dist/\n");

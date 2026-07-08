@@ -22,6 +22,7 @@ import httpProxy from "http-proxy";
 import { buildOverlay } from "../overlay/build";
 import { buildShell } from "../shell/build";
 import { buildBuilder } from "../builder/build";
+import { buildEmbed } from "../embed/build";
 import {
   HARNESS_PREFIX,
   OVERLAY_PATH,
@@ -29,11 +30,14 @@ import {
   SHELL_JS_PATH,
   BUILD_PATH,
   BUILD_JS_PATH,
+  EMBED_PATH,
+  EMBED_JS_PATH,
   injectOverlay,
   relaxSecurityHeaders,
   rewriteAbsoluteUrls,
   shellPage,
   builderPage,
+  embedPage,
   type InjectConfig,
 } from "./inject";
 
@@ -56,6 +60,12 @@ export interface HarnessOptions {
   mountExtra?: (req: IncomingMessage, res: ServerResponse) => boolean;
   /** EMBEDDED mode: also serve the builder pane (/__nitpicker-harness/build[.js]) alongside the shell. */
   builderPane?: boolean;
+  /** EMBED-BRIDGE mode (experience #3): the origins an external host (Loom) is trusted to drive the embed
+   *  bridge from. When set (non-empty), the chromeless embed page (/__nitpicker-harness/embed[.js]) is
+   *  served and the in-frame InteractionLayer relays marks to those origins over postMessage. Like
+   *  `builderPane`, this also suppresses the classic in-frame overlay (the app is driven from the parent).
+   *  Omitted/empty → the embed route is NOT served (fail-closed) and behavior is byte-for-byte unchanged. */
+  embedAllowedOrigins?: readonly string[];
 }
 
 export interface Harness {
@@ -76,7 +86,11 @@ export function startHarness(opts: HarnessOptions): Promise<Harness> {
   // interface (it drives interaction from the parent), so the classic in-frame overlay is NEVER injected into
   // the app — for ANY request, so it survives a `/`→`/dashboard` redirect and any SPA/full-page navigation.
   // With `builderPane` off (classic feedback-proxy / shell) the overlay is injected exactly as before.
-  const injectClassicOverlay = !opts.builderPane;
+  // Embed-bridge mode is on when a trusted-host allow-list is configured. The app is then driven from the
+  // parent host, so — like builderPane — the classic in-frame overlay is suppressed (no double UI).
+  const embedOrigins = (opts.embedAllowedOrigins ?? []).filter((o) => !!o && o !== "*");
+  const embedMode = embedOrigins.length > 0;
+  const injectClassicOverlay = !opts.builderPane && !embedMode;
 
   const proxy = httpProxy.createProxyServer({
     target: opts.target,
@@ -183,6 +197,10 @@ export function startHarness(opts: HarnessOptions): Promise<Harness> {
     // the caller opting in (builderPane / mountExtra) so the classic paths are byte-for-byte unchanged.
     if (opts.builderPane && url.pathname === BUILD_PATH) return void serveBuilderPage(res, injectCfg);
     if (opts.builderPane && url.pathname === BUILD_JS_PATH) return void serveBuilderBundle(res, log);
+    // EMBED-BRIDGE mode: the chromeless embed page + its bundle, served ONLY when a trusted-host allow-list
+    // is configured (fail-closed). The allowed origins are baked in server-side, never read from the request.
+    if (embedMode && url.pathname === EMBED_PATH) return void serveEmbedPage(res, injectCfg, embedOrigins);
+    if (embedMode && url.pathname === EMBED_JS_PATH) return void serveEmbedBundle(res, log);
     // The gateway (mountExtra) owns its `/agent/*` routes; try it before the proxy falls through.
     if (opts.mountExtra?.(req, res)) return;
     if (url.pathname === `${HARNESS_PREFIX}/health`) {
@@ -382,6 +400,34 @@ async function serveBuilderBundle(res: ServerResponse, log: (m: string) => void)
     log(`[nitpicker-harness] builder bundle failed: ${message}`);
     res.writeHead(500, { "content-type": "application/javascript" });
     res.end(`console.error(${JSON.stringify(`nitpicker-harness builder build failed: ${message}`)});`);
+  }
+}
+
+/** Serve the chromeless embed-bridge page (EMBED_PATH). Static string from inject.ts — the trusted host
+ *  origins are baked in server-side (from HarnessOptions), never taken from the request. */
+function serveEmbedPage(res: ServerResponse, cfg: InjectConfig, allowedOrigins: readonly string[]): void {
+  const html = embedPage(cfg, allowedOrigins);
+  res.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-cache",
+  });
+  res.end(html);
+}
+
+/** Serve the embed bundle (EMBED_JS_PATH). Mirrors serveBuilderBundle: build-on-first-request, cached. */
+async function serveEmbedBundle(res: ServerResponse, log: (m: string) => void): Promise<void> {
+  try {
+    const js = await buildEmbed();
+    res.writeHead(200, {
+      "content-type": "application/javascript; charset=utf-8",
+      "cache-control": "no-cache",
+    });
+    res.end(js);
+  } catch (err) {
+    const message = (err as Error).message;
+    log(`[nitpicker-harness] embed bundle failed: ${message}`);
+    res.writeHead(500, { "content-type": "application/javascript" });
+    res.end(`console.error(${JSON.stringify(`nitpicker-harness embed build failed: ${message}`)});`);
   }
 }
 

@@ -21,6 +21,7 @@ import { startSidecar } from "./sidecar";
 import { startEmbeddedBuilder } from "./index";
 import { makeBackend } from "./agent/backend";
 import { bearerAuth } from "./agent/gateway";
+import { parseOrigins } from "./embed/protocol";
 import { runPoll } from "../vendor/nitpicker/cli/poll";
 import { runStopHook } from "./hook";
 
@@ -40,8 +41,9 @@ function usage(): void {
     `nitpicker-harness — point at a running dev server and mark up feedback for your AI agent.\n\n` +
       `  nitpicker-harness <path-to-app> [--dev-cmd "<cmd>"] [--target-port <n>] [--port <n>]\n` +
       `                                  [--session <id>] [--agent claude|claude-cli] [--no-agent]\n` +
-      `                                  [--system-prompt <file>]\n` +
+      `                                  [--system-prompt <file>] [--embed-origin <origin>[,…]]\n` +
       `  nitpicker-harness --target <url> [--port <n>] [--session <id>] [--sidecar-port <n>] [--no-sidecar]\n` +
+      `                                  [--embed-origin <origin>[,…]]\n` +
       `  nitpicker-harness poll --session <id> [--endpoint <url>] [--watch]\n` +
       `  nitpicker-harness stop-hook --session <id> [--endpoint <url>] [--timeoutMs <n>]\n` +
       `  nitpicker-harness pending --session <id> [--endpoint <url>]\n` +
@@ -52,7 +54,9 @@ function usage(): void {
       `  or pass --target-port matching the port the command binds, else readiness detection times out.\n` +
       `  The agent runs the Loom builder persona by default; override with --system-prompt <file> or the\n` +
       `  NITPICKER_HARNESS_SYSTEM_PROMPT env var.\n` +
-      `Target mode (--target): point at an already-running server; mark up with the dock / builder shell.\n`,
+      `Target mode (--target): point at an already-running server; mark up with the dock / builder shell.\n` +
+      `Embed bridge (--embed-origin): serve a chromeless /__nitpicker-harness/embed page that the given host\n` +
+      `  origin(s) frame + drive over postMessage (createHarnessEmbedClient). Omitted → the route isn't served.\n`,
   );
 }
 
@@ -89,6 +93,10 @@ async function serve(args: string[]): Promise<void> {
   const sidecarPort = Number(flag(args, "sidecar-port")) || DEFAULT_SIDECAR_PORT;
   const endpoint = flag(args, "endpoint") || `http://127.0.0.1:${sidecarPort}`;
   const runSidecar = !has(args, "no-sidecar");
+  // Optional cross-frame embed bridge: --embed-origin <origin>[,<origin>…] trusts those host origins to
+  // drive the chromeless /__nitpicker-harness/embed page. Omitted → the embed route is not served.
+  const embedAllowedOrigins = parseOrigins(flag(args, "embed-origin"));
+  const embedMode = embedAllowedOrigins.length > 0;
 
   let sidecar: ChildProcess | null = null;
   if (runSidecar) {
@@ -98,21 +106,33 @@ async function serve(args: string[]): Promise<void> {
     });
   }
 
-  const harness = await startHarness({ target, port, session, endpoint });
+  const harness = await startHarness({
+    target,
+    port,
+    session,
+    endpoint,
+    embedAllowedOrigins: embedAllowedOrigins.length ? embedAllowedOrigins : undefined,
+  });
 
   process.stdout.write(
     `\n  nitpicker-harness ready\n` +
       `  ┌─────────────────────────────────────────────\n` +
       `  │ open:     ${harness.url}\n` +
       `  │ shell:    ${harness.url}/__nitpicker-harness/shell\n` +
+      (embedMode
+        ? `  │ embed:    ${harness.url}/__nitpicker-harness/embed  (hosts: ${embedAllowedOrigins.join(", ")})\n`
+        : "") +
       `  │ target:   ${target}\n` +
       `  │ sidecar:  ${endpoint}${runSidecar ? "" : "  (external — --no-sidecar)"}\n` +
       `  │ session:  ${session}\n` +
       `  └─────────────────────────────────────────────\n` +
-      `  • Feedback-proxy mode: open the app URL and mark up with the bottom-center dock.\n` +
-      `  • Builder-shell mode:  open the shell URL — persistent chat + queue in a parent frame.\n` +
-      `  Then in your agent run:\n` +
-      `      nitpicker-harness poll --session ${session}\n\n`,
+      (embedMode
+        ? `  • Embed-bridge mode: the classic in-frame dock is suppressed — an external host (${embedAllowedOrigins.join(", ")})\n` +
+          `    frames the embed URL and drives it over postMessage (createHarnessEmbedClient); marks relay to the host.\n\n`
+        : `  • Feedback-proxy mode: open the app URL and mark up with the bottom-center dock.\n` +
+          `  • Builder-shell mode:  open the shell URL — persistent chat + queue in a parent frame.\n` +
+          `  Then in your agent run:\n` +
+          `      nitpicker-harness poll --session ${session}\n\n`),
   );
 
   const shutdown = (): void => {
@@ -157,6 +177,7 @@ async function serveEmbedded(args: string[], appPathArg: string): Promise<void> 
 
   const agent = noAgent ? undefined : makeBackend(agentName, { model });
   const auth = token ? bearerAuth(token) : undefined;
+  const embedAllowedOrigins = parseOrigins(flag(args, "embed-origin"));
 
   const builder = await startEmbeddedBuilder({
     appPath,
@@ -172,6 +193,7 @@ async function serveEmbedded(args: string[], appPathArg: string): Promise<void> 
     noAgent,
     agent,
     auth,
+    embedAllowedOrigins: embedAllowedOrigins.length ? embedAllowedOrigins : undefined,
     log: (m) => process.stdout.write(m.endsWith("\n") ? m : m + "\n"),
   });
 
@@ -181,6 +203,7 @@ async function serveEmbedded(args: string[], appPathArg: string): Promise<void> 
       `  │ open:     ${builder.url}\n` +
       `  │ builder:  ${builder.builderUrl}\n` +
       `  │ shell:    ${builder.shellUrl}\n` +
+      (builder.embedUrl ? `  │ embed:    ${builder.embedUrl}  (hosts: ${embedAllowedOrigins.join(", ")})\n` : "") +
       `  │ app:      ${appPath}\n` +
       `  │ target:   ${builder.targetUrl}  (owned dev server)\n` +
       `  │ sidecar:  ${endpoint}${noSidecar ? "  (external — --no-sidecar)" : ""}\n` +

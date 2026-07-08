@@ -25,6 +25,13 @@ export const SHELL_JS_PATH = `${HARNESS_PREFIX}/shell.js`;
 // above (and its sidecar/poll consumers) are byte-for-byte unchanged.
 export const BUILD_PATH = `${HARNESS_PREFIX}/build`;
 export const BUILD_JS_PATH = `${HARNESS_PREFIX}/build.js`;
+// The "embed bridge" mode (experience #3, the "one harness, many hosts" unification): a chromeless SIBLING
+// of the builder pane, served at EMBED_PATH, that an EXTERNAL host (Loom's own DS builder chrome) frames.
+// It runs the reused InteractionLayer against the same-origin proxied app but renders NO chrome — it relays
+// each produced mark UP to the host over an origin-checked `postMessage` bridge (src/embed/*). Gated on the
+// server being configured with a trusted-host allow-list, so it's never exposed unless a host is wired.
+export const EMBED_PATH = `${HARNESS_PREFIX}/embed`;
+export const EMBED_JS_PATH = `${HARNESS_PREFIX}/embed.js`;
 // Overlay-suppression is MODE-gated, not per-request: in EMBEDDED/BUILDER mode (server.ts `builderPane` on)
 // the proxy NEVER injects the classic in-frame overlay into the app. The builder pane is the sole interface
 // and already drives element-pick / region / inline-edit from the PARENT against its iframe (the reused
@@ -257,6 +264,39 @@ export function builderPage(cfg: InjectConfig): string {
     </div>
   </aside>
   <script src="${BUILD_JS_PATH}?${q}" data-nitpicker-harness="build"></script>
+</body>
+</html>`;
+}
+
+/** The chromeless embed-bridge page (served at EMBED_PATH, on the harness origin). An external host frames
+ *  THIS page; it embeds the proxied app in a same-origin `<iframe src="/">` and loads the embed bundle
+ *  (EMBED_JS_PATH), which drives the reused InteractionLayer over that frame and relays marks to the host
+ *  over `postMessage`. No visible chrome — the host renders its own. The trusted host origins are baked into
+ *  the bundle URL's query string by the SERVER (never taken from the client's request), so the origin gate
+ *  can't be widened by a request. Pure/string-only so it stays unit-testable. */
+export function embedPage(cfg: InjectConfig, allowedOrigins: readonly string[]): string {
+  const q = new URLSearchParams({
+    session: cfg.session,
+    endpoint: cfg.endpoint,
+    origins: allowedOrigins.join(","),
+  }).toString();
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>nitpicker-harness · embed</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: #fff; }
+  /* Chromeless: the app frame fills the page; the host renders all UI around this iframe. */
+  #nh-frame { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; }
+</style>
+</head>
+<body>
+  <iframe id="nh-frame" src="/" title="proxied app"></iframe>
+  <script src="${EMBED_JS_PATH}?${q}" data-nitpicker-harness="embed"></script>
 </body>
 </html>`;
 }

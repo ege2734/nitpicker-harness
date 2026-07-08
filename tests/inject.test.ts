@@ -10,8 +10,10 @@ import {
   relaxSecurityHeaders,
   shellPage,
   builderPage,
+  embedPage,
   OVERLAY_PATH,
   SHELL_JS_PATH,
+  EMBED_JS_PATH,
 } from "../src/proxy/inject";
 
 const CFG = { session: "demo", endpoint: "http://127.0.0.1:5178" };
@@ -101,6 +103,23 @@ describe("overlay suppression (embedded builder)", () => {
     // SPA navigation: EVERY app request through an embedded harness is suppressed, regardless of its URL.
     expect(builderPage(CFG)).toContain('<iframe id="nh-frame" src="/"');
     expect(shellPage(CFG)).toContain('<iframe id="nh-frame" src="/"');
+  });
+});
+
+describe("embedPage (cross-frame embed bridge)", () => {
+  it("is chromeless: an app iframe + the embed bundle, with the trusted origins baked into the script URL", () => {
+    const html = embedPage(CFG, ["https://loom.example", "https://app.loom.example"]);
+    expect(html).toContain('<iframe id="nh-frame" src="/"');
+    expect(html).toContain('data-nitpicker-harness="embed"');
+    expect(html).toContain(EMBED_JS_PATH);
+    // origins ride the bundle URL's query string (URL-encoded, comma-joined).
+    const q = html.match(/embed\.js\?([^"]+)/)?.[1] ?? "";
+    const params = new URLSearchParams(q);
+    expect(params.get("origins")).toBe("https://loom.example,https://app.loom.example");
+    expect(params.get("session")).toBe("demo");
+    // No chat rail / mode toolbar — the host renders its own chrome.
+    expect(html).not.toContain('id="nh-transcript"');
+    expect(html).not.toContain('id="nh-mode-region"');
   });
 });
 

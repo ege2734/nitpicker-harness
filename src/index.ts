@@ -51,6 +51,26 @@ export {
 } from "./agent/gateway";
 export { formatTurn, formatMark, type FormattedTurn } from "./agent/format";
 export { LOOM_BUILDER_SYSTEM_PROMPT, SYSTEM_PROMPT_ENV, resolveSystemPrompt } from "./agent/system-prompt";
+// ---- cross-frame embed bridge (experience #3): the host-side client Loom imports + the wire protocol ----
+export {
+  createHarnessEmbedClient,
+  type HarnessEmbedClient,
+  type HarnessEmbedClientOptions,
+} from "./embed/client";
+export {
+  EMBED_PROTOCOL_VERSION,
+  EMBED_MODES,
+  HOST_SOURCE,
+  FRAME_SOURCE,
+  isHostCommand,
+  isFrameEvent,
+  isEmbedMode,
+  originAllowed,
+  parseOrigins,
+  type EmbedMode,
+  type HostCommand,
+  type FrameEvent,
+} from "./embed/protocol";
 
 export interface EmbeddedBuilderOptions {
   /** The app repo path — the runtime spawns its dev server here and the agent edits here. */
@@ -88,6 +108,10 @@ export interface EmbeddedBuilderOptions {
   /** Escape hatch: own the dev server but point the pane at the classic sidecar/poll sink (no agent). Keeps
    *  the door open for pocketwatcher-style external drivers from a path. */
   noAgent?: boolean;
+  /** EMBED-BRIDGE mode (experience #3): origins an external host (Loom's own chrome) is trusted to drive the
+   *  chromeless embed page from. When set, `embedUrl` is served and the in-frame InteractionLayer relays
+   *  marks to those origins over postMessage. The host consumes them via `createHarnessEmbedClient`. */
+  embedAllowedOrigins?: readonly string[];
   host?: string;
   log?: (m: string) => void;
 }
@@ -99,6 +123,8 @@ export interface EmbeddedBuilder {
   builderUrl: string;
   /** The builder-shell (queue → sidecar) — always available. */
   shellUrl: string;
+  /** The chromeless embed-bridge page a host frames (undefined unless `embedAllowedOrigins` was set). */
+  embedUrl?: string;
   /** The origin of the owned dev server being proxied. */
   targetUrl: string;
   /** The primary agent session (undefined under `noAgent`). */
@@ -170,15 +196,19 @@ export async function startEmbeddedBuilder(opts: EmbeddedBuilderOptions): Promis
     log,
     mountExtra: gateway?.handler,
     builderPane: !opts.noAgent,
+    embedAllowedOrigins: opts.embedAllowedOrigins,
   });
 
   const shellUrl = `${harness.url}/__nitpicker-harness/shell`;
   const builderUrl = opts.noAgent ? shellUrl : `${harness.url}/__nitpicker-harness/build`;
+  const embedOrigins = (opts.embedAllowedOrigins ?? []).filter((o) => !!o && o !== "*");
+  const embedUrl = embedOrigins.length ? `${harness.url}/__nitpicker-harness/embed` : undefined;
 
   return {
     url: harness.url,
     builderUrl,
     shellUrl,
+    embedUrl,
     targetUrl,
     session,
     runtime,
