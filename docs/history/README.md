@@ -17,7 +17,7 @@ still follows, and they live one level up:
 
 | Document | What it is |
 |---|---|
-| [`../viability-report.md`](../viability-report.md) | **The design authority.** Why the harness must be a *same-origin reverse proxy* rather than a cross-origin iframe shell, grounded in the overlay-engine source with `file:line` references. §3a and §6 are cited by nearly every build plan below. *(2026-07-05)* |
+| [`../viability-report.md`](../viability-report.md) | **The design authority.** Why the harness must be a *same-origin reverse proxy* rather than a cross-origin iframe shell, grounded in the overlay-engine source with `file:line` references. §3a and §6 are cited by nearly every build plan below. Archived with its brief at [`viability-study/`](./viability-study/). *(2026-07-05)* |
 | [`../competitive-landscape.md`](../competitive-landscape.md) | **The prior-art scan.** Deep-research pass on whether an OSS dependency-free harness giving an external agent both region screenshots and element→component→source already existed. Verdict: largely whitespace. *(2026-07-05)* |
 
 After those, the two documents that shaped everything since are
@@ -50,7 +50,7 @@ The investigations that decided architecture. Read these first.
 
 | Document | Covers | When |
 |---|---|---|
-| [`viability-study/brief.md`](./viability-study/brief.md) | The assignment that produced [`../viability-report.md`](../viability-report.md): can nitpicker become a standalone harness pointed at *any* app, with zero code in the target repo? *(The report itself lives at `docs/viability-report.md` — it was committed there when Phase 1 landed.)* | 2026-07-05 |
+| [`viability-study/`](./viability-study/) | **The founding analysis.** Can nitpicker become a standalone harness pointed at *any* app, with zero code in the target repo? Surveys the approaches (iframe shell, extension, proxy, keep-injecting), lands on the same-origin proxy, and sets out the Phase 1 recommendation the MVP was built from — grounded in the overlay source with `file:line` references and cited prior art. Archived here with the brief that commissioned it; the same report is the living design authority at [`../viability-report.md`](../viability-report.md), where it was committed when Phase 1 landed. The two copies are byte-identical — **edit `docs/viability-report.md`, not this one.** | 2026-07-05 |
 | [`builder-shell-spike/`](./builder-shell-spike/) | **Feasibility spike + the phased build plan.** Should the harness be re-architected into a "builder shell" — persistent chat, browser-in-a-browser preview, element→source provenance — for *building* an app rather than annotating one? Verdict plus §4b hydration evidence, the §5 single-offset geometry rule, and the Phase 0–4 breakdown. In-browser proof included. | 2026-07-05 |
 | [`embedded-agent-design/`](./embedded-agent-design/) | **The embedded-agent design.** Turning the side pane into a live agent you build with, rather than an external `poll`-drained queue: `AppRuntime`, `AgentBackend`, the SSE Agent Gateway, the `InteractionLayer` extraction, and the `startEmbeddedBuilder()` interface. §7 is the concrete `src/` change list W1 was implemented from. | 2026-07-06 |
 | [`instant-capture-spike/`](./instant-capture-spike/) | **Spike: truly-instant region capture.** Can `Cmd/Ctrl+Shift+X` draw with zero visible freeze by cloning the DOM at keypress and deferring the html2canvas raster? Verdict: viable (~20 ms), preserves hover-only cards. Includes the three verification screenshots the report references. | 2026-07-05 |
@@ -130,7 +130,7 @@ mapping, for anyone correlating against branch names, PR titles or an in-documen
 | `nh-shell-spike` | [`builder-shell-spike/`](./builder-shell-spike/) |
 | `nh-sync-latest` | [`vendor-core-sync/`](./vendor-core-sync/) |
 | `np-fast-r6` | [`region-instant-mode-switch/`](./region-instant-mode-switch/) |
-| `np-harness-s9` | [`viability-study/`](./viability-study/) — brief only; its report is [`../viability-report.md`](../viability-report.md) |
+| `np-harness-s9` | [`viability-study/`](./viability-study/) — its report is also the living [`../viability-report.md`](../viability-report.md) |
 | `np-hotkey-x7` | [`region-capture-hotkey/`](./region-capture-hotkey/) |
 | `np-instant-capture` | [`instant-capture-spike/`](./instant-capture-spike/) |
 | `np-screenshots` | [`readme-screenshot-refresh/`](./readme-screenshot-refresh/) |
