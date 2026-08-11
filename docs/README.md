@@ -16,3 +16,7 @@ that fronts a target dev server and injects the feedback overlay with zero code 
   an OSS dependency-free reverse-proxy harness giving an *external* agent both region-annotated
   screenshots and element→component→source? Verdict: largely whitespace. Landscape matrix + cited,
   adversarially-verified claims.
+- [**history/**](./history/) — the full project history: the feasibility spikes, build plans, UX-fix
+  rounds and the public-readiness audit behind everything in `src/` and `vendor/`, written 2026-07.
+  Start at [history/README.md](./history/README.md), which indexes and groups the set. The two documents
+  above are the design authority it repeatedly cites.

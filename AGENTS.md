@@ -290,7 +290,10 @@ overlay into the streamed HTML. Design authority: the viability report (task spe
   synced from nitpicker `main` @ `a8d109b`. This repo is self-contained and must not depend back on the
   nitpicker repo. nitpicker is being archived, so this is the canonical home — do not upstream back.
 - `docs/` — background research: `viability-report.md` (the same-origin-proxy design authority) and
-  `competitive-landscape.md` (prior-art scan). `docs/README.md` indexes them.
+  `competitive-landscape.md` (prior-art scan). `docs/README.md` indexes them. `docs/history/` holds the
+  folded-in design/planning history — the feasibility spikes, per-phase build plans, UX-fix rounds and the
+  public-readiness audit that produced this code; `docs/history/README.md` is the index. Read it for the
+  intent behind a decision this file only states; it is archival, so it is never the current how-to.
 
 ## Sharp edges (learned the hard way)
 
